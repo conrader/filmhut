@@ -58,7 +58,7 @@ Reply `1` to proceed, or describe what you want.
 
 Before the first image or video generation in this project/session, ask once per capability with the structured question shape above, then remember the answer in session. Put the price in each option label.
 
-Image choices: `Standard 2K ~$0.10` recommended, `Pro 2K ~$0.45`, `Max quality ~$0.77`. Video choices: `720p Preview ~$0.20/s` recommended, `480p Draft ~$0.08/s`, `1080p Final ~$0.44/s`. If the user already specified quality/resolution, or says "just do it", don't ask; default to `Standard 2K` and `720p Preview`. Recipes that require the pro image tier (storyboard mosaics, video-bound character sheets) override the chosen image mode.
+Image choices: `Standard 1K ~$0.003` recommended, `Standard 2K ~$0.011`, `Standard 4K ~$0.043`. Pro image edits ~$0.035. Video is quoted per call (~$0.01-0.05/s depending on resolution); voice is ~$0.77 per 1M characters; upscale is quoted per call, linear in duration. If the user already specified quality/resolution, or says "just do it", don't ask; default to `Standard 1K` for images and let `generate_video.js` quote the exact video price. Recipes that require the pro image tier (storyboard mosaics, video-bound character sheets) override the chosen image mode.
 
 ## Choosing context
 
@@ -202,9 +202,9 @@ When checking a restaged result, add `"retry_of": "<original node_id>"` inside i
 
 Generation CLIs mirror outputs into `projects/<active>/assets/<kind>/` and return `output_url`, `local_path`, and `canvas_mutation`; canvas nodes store `local_path`.
 
-Use `--ref-source-id <NODE_ID>` for image/video refs, `--ref-audio-source-id <NODE_ID>` for audio refs, and `--source-node-id <NODE_ID>` for the one canvas node that authored the result. Mirror external URLs first with `mirror_url.js`.
+Use `--ref-source-id <NODE_ID>` for image refs and `--ref-audio-source-id <NODE_ID>` for audio refs, and `--source-node-id <NODE_ID>` for the one canvas node that authored the result. Mirror external URLs first with `mirror_url.js`.
 
-For video refs, the local tunnel must be running because the provider fetches refs server-side. If `.tunnel_url` is missing, surface the `bad_args` message and ask the user to start the viewer/tunnel.
+Video generation accepts at most 2 image refs (first frame + optional last frame) and at most 1 audio ref (routes to audio-sync). Video-as-reference is not supported. Refs go up as direct multipart uploads to deAPI, so the local tunnel is not required for this path.
 
 ## Canvas
 

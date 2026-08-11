@@ -27,7 +27,7 @@ load_env() {
         . "$PAI_REPO_ROOT/.env"
         set +a
     else
-        echo "WARNING: .env not found. Copy .env.example to .env and set PAI_KEY before media generation."
+        echo "WARNING: .env not found. Copy .env.example to .env and set DEAPI_KEY before media generation."
     fi
 
     if [ "$CALLER_PAI_DEFAULT_AGENT_ID_IS_SET" = "1" ]; then

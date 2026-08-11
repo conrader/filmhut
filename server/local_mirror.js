@@ -282,11 +282,11 @@ function makeBadArgs(message) {
 
 /**
  * Build the array of refs to hand to a provider. Every ref is a canvas
- * node id — we look up its `local_path` and rewrite the host onto the
- * cloudflared tunnel origin so PAI's server-side fetch can reach it.
- * The cached PAI `asset_id` (if any) rides alongside so callers that
- * upload through video-generation-assets can skip CreateAsset when it's
- * already known.
+ * node id — we look up its `local_path` and resolve it to the absolute
+ * on-disk file (`absPath`), which deAPI consumers upload directly as
+ * multipart form files. A tunnel URL still rides along when a
+ * cloudflared tunnel is configured (`tunnelUrl`, else null) for callers
+ * that want a public URL, but it is no longer required.
  *
  * External URLs are not accepted here. The agent mirrors them onto the
  * canvas first via `mirror_url.js`, which mints a `subtype: "reference"`
@@ -295,7 +295,7 @@ function makeBadArgs(message) {
  * @param {Object}    opts
  * @param {string[]}  opts.sourceIds  list of --ref-source-id values
  * @param {string}    [opts.projectId]
- * @returns {Promise<{ tunnelUrl: string, assetId: string | null }[]>}
+ * @returns {Promise<{ absPath: string, localPath: string, tunnelUrl: string | null, assetId: string | null }[]>}
  */
 export async function buildProviderRefs({ sourceIds = [], projectId } = {}) {
   // No refs → nothing to resolve. Return before touching the active-project
@@ -322,15 +322,17 @@ export async function buildProviderRefs({ sourceIds = [], projectId } = {}) {
         `Ref ${i + 1}: node ${sid} has no local_path. Asset nodes must carry local_path; if this is an old workflow.json shape, regenerate the asset.`,
       );
     }
-    const tunnelUrl = tunnelUrlForLocalPath({ localPath: lp, projectId: proj });
-    if (!tunnelUrl) {
+    const absPath = path.join(PAI_REPO_ROOT, "projects", proj, lp);
+    if (!fsSync.existsSync(absPath)) {
       throw makeBadArgs(
-        `No tunnel configured for ref ${i + 1}. Run ./scripts/start.sh (auto-launches cloudflared).`,
+        `Ref ${i + 1}: node ${sid} points at ${lp}, but the file is missing on disk. Regenerate the asset.`,
       );
     }
+    // Tunnel URL is best-effort now — deAPI uploads the bytes directly.
+    const tunnelUrl = tunnelUrlForLocalPath({ localPath: lp, projectId: proj }) || null;
     const md = node?.data?.metadata;
     const assetId = typeof md?.asset_id === "string" && md.asset_id ? md.asset_id : null;
-    out.push({ tunnelUrl, assetId });
+    out.push({ absPath, localPath: lp, tunnelUrl, assetId });
   }
   return out;
 }

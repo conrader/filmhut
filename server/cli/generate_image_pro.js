@@ -4,7 +4,7 @@
 // User-facing model: image-generation-pro. Calls without refs use the
 // raw image-generation-pro route; calls with --ref-source-id values use
 // raw image-edit-pro internally. Refs remain canvas node ids only; the
-// CLI resolves them to tunnel URLs through buildProviderRefs().
+// CLI resolves them to absolute local paths through buildProviderRefs().
 //
 // Pro accepts exact --size only. Do not add --aspect-ratio or --image-size
 // flags here; those are standard-tier provider inputs.
@@ -231,13 +231,13 @@ try {
   const resolvedRefs = (await buildProviderRefs({
     sourceIds: refSources,
     projectId,
-  })).map((r) => r.tunnelUrl);
+  })).map((r) => r.absPath);
 
   const result = await paiGenerateImagePro({
     prompt: args.prompt,
     size: args.size,
     outputFormat,
-    refImageUrls: resolvedRefs,
+    refImagePaths: resolvedRefs,
   });
   const staged = await writeBytesToTmp({
     bytes: result.bytes,
@@ -251,7 +251,7 @@ try {
     label: args.label || truncateLabel(args.prompt),
     prompt: args.prompt,
     metadata: {
-      source: "pai",
+      source: "deapi",
       task_type: "image_generation",
       model: result.model,
       size: result.size,

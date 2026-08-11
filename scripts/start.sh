@@ -158,7 +158,7 @@ sync_skills() {
 
 load_env() {
     if [ ! -f "$PAI_REPO_ROOT/.env" ]; then
-        echo "⚠️  .env not found. Copy .env.example → .env and fill PAI_KEY"
+        echo "⚠️  .env not found. Copy .env.example → .env and fill DEAPI_KEY"
         echo "    (one key for image + video + voice + asset upload) before you"
         echo "    trigger any media-generation skill. The viewer alone runs"
         echo "    without it."
@@ -168,28 +168,28 @@ load_env() {
     . "$PAI_REPO_ROOT/.env"
     set +a
 
-    # Interactive PAI_KEY prompt — catches users who only ran
+    # Interactive DEAPI_KEY prompt — catches users who only ran
     # `cp .env.example .env` (the old README on-ramp) and never filled
     # the key. Skip in non-TTY contexts (CI, scripted setup) where
     # the user can't respond to a prompt.
-    if [ -z "${PAI_KEY:-}" ] && [ -t 0 ]; then
+    if [ -z "${DEAPI_KEY:-}" ] && [ -t 0 ]; then
         echo ""
-        echo "PAI_KEY isn't set in your .env yet."
-        echo "Get a key at https://pai-pro.utopaistudios.com/keys (format: PAI_<random>)."
-        printf "Paste your PAI_KEY here (or Ctrl+C to abort): "
-        read -r PAI_KEY
-        if [ -z "$PAI_KEY" ]; then
-            echo "ERROR: PAI_KEY still empty; aborting."
+        echo "DEAPI_KEY isn't set in your .env yet."
+        echo "Get a key at https://app.deapi.ai/dashboard/api-keys."
+        printf "Paste your DEAPI_KEY here (or Ctrl+C to abort): "
+        read -r DEAPI_KEY
+        if [ -z "$DEAPI_KEY" ]; then
+            echo "ERROR: DEAPI_KEY still empty; aborting."
             exit 1
         fi
-        # Replace the existing PAI_KEY= line in place (sed -i.bak then rm
+        # Replace the existing DEAPI_KEY= line in place (sed -i.bak then rm
         # the .bak — portable across BSD/macOS sed and GNU/Linux sed).
         # Both parsers (bash source + dotenv pkg) honor last-occurrence,
         # but in-place replacement keeps .env clean for users who later
         # edit it manually.
-        sed -i.bak "s|^PAI_KEY=.*|PAI_KEY=$PAI_KEY|" "$PAI_REPO_ROOT/.env" && \
+        sed -i.bak "s|^DEAPI_KEY=.*|DEAPI_KEY=$DEAPI_KEY|" "$PAI_REPO_ROOT/.env" && \
             rm -f "$PAI_REPO_ROOT/.env.bak"
-        export PAI_KEY
+        export DEAPI_KEY
         echo "Saved to .env. Continuing boot."
         echo ""
     fi
@@ -242,10 +242,11 @@ install_deps() {
 }
 
 # ---- tunnel ---------------------------------------------------------------
-# PAI's `video-generation-assets` endpoint fetches video refs server-side and can't
-# reach localhost. We expose the viewer's /projects/:id/assets/... routes
-# via a free Cloudflare quick tunnel and write the URL to .tunnel_url;
-# local_mirror.js reads from there. Override the auto-launch by setting
+# deAPI takes media refs as direct multipart uploads, so this tunnel is no
+# longer required for that path. It's kept for exposing the viewer's
+# /projects/:id/assets/... routes over a free Cloudflare quick tunnel
+# (written to .tunnel_url; local_mirror.js reads from there) for any other
+# use that needs a public URL. Override the auto-launch by setting
 # PUBLIC_VIEWER_URL in .env.
 
 # Kill a tunnel session whose state is no longer trustworthy. The tmux

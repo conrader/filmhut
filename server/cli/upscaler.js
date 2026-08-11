@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// CLI wrapper for PAI video upscaling. Follows the documented upscale-*
-// flow and writes the result as a normal video_result node.
+// CLI wrapper for video upscaling via deAPI (quote → multipart submit →
+// poll). Writes the result as a normal video_result node.
 
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
@@ -8,12 +8,10 @@ import path from "node:path";
 
 import { parseArgs, emitSuccess, emitFailure, classify, isoNow } from "./_cli.js";
 import {
-  createUpscale,
-  acceptUpscale,
-  uploadUpscaleSource,
-  completeUpscale,
+  quoteUpscale,
+  submitUpscale,
   pollUpscale,
-  UPSCALE_COMPLETE_MODEL,
+  UPSCALE_MODEL_ID,
 } from "../pai_upscale_client.js";
 import {
   streamUrlToTmp,
@@ -230,30 +228,8 @@ function resolutionString({ width, height }) {
   return `${Math.round(width)}x${Math.round(height)}`;
 }
 
-function buildCreatePayload(sourceSpec, outputResolution) {
-  return {
-    source: {
-      resolution: { width: sourceSpec.width, height: sourceSpec.height },
-      container: sourceSpec.container,
-      size: sourceSpec.size,
-      duration: sourceSpec.duration,
-      frameRate: sourceSpec.frameRate,
-      frameCount: sourceSpec.frameCount,
-    },
-    output: {
-      resolution: outputResolution,
-      frameRate: sourceSpec.frameRate,
-      container: "mp4",
-      audioCodec: "AAC",
-      audioTransfer: "Copy",
-    },
-    filters: [{ model: "prob-4" }],
-  };
-}
-
-function replayArgvWithEstimate(requestId, costUsd) {
+function replayArgvWithEstimate(costUsd) {
   const out = rawArgv.filter((a) => a !== "--stage" && a !== "--draft-only" && a !== "--stage-only");
-  if (!out.includes("--upscale-request-id")) out.push("--upscale-request-id", requestId);
   if (!out.includes("--estimated-cost-usd") && typeof costUsd === "number") {
     out.push("--estimated-cost-usd", String(costUsd));
   }
@@ -293,26 +269,24 @@ async function resolveSource() {
   };
 }
 
-async function ensureUpscaleRequest(sourceSpec, outputResolution) {
-  const existing = args["upscale-request-id"];
-  if (existing) {
-    return {
-      requestId: existing,
-      costUsd: parseRate(args["estimated-cost-usd"]),
-    };
+// Reuse the staged estimate on replay (--estimated-cost-usd from the
+// draft sidecar's argv); otherwise fetch a fresh quote. deAPI has no
+// pre-created request object — the quote is stateless and the source
+// uploads inline at submit time. --upscale-request-id is still accepted
+// for old sidecar replays but carries no meaning anymore.
+async function ensureUpscaleQuote(sourceSpec) {
+  const replayedCost = parseRate(args["estimated-cost-usd"]);
+  if (replayedCost != null) {
+    return { costUsd: replayedCost, scale: null };
   }
-  const created = await createUpscale(buildCreatePayload(sourceSpec, outputResolution));
-  const costUsd = typeof created.estimates?.price_usd === "number"
-    ? created.estimates.price_usd
-    : null;
-  return { requestId: created.requestId, costUsd };
+  const { costUsd, scale } = await quoteUpscale({ sourceSpec });
+  return { costUsd, scale };
 }
 
 if (args.stage && !routeOwnedPending) {
   try {
     const resolved = await resolveSource();
-    const { requestId, costUsd } = await ensureUpscaleRequest(resolved.sourceSpec, resolved.outputResolution);
-    lastUpscaleRequestId = requestId;
+    const { costUsd } = await ensureUpscaleQuote(resolved.sourceSpec);
     const staged = await writePending({
       jobId,
       kind: "video",
@@ -321,7 +295,7 @@ if (args.stage && !routeOwnedPending) {
       aspectRatio: resolved.aspectRatio,
       sourceNodeId: args["source-node-id"],
       referenceSourceIds: [],
-      model: UPSCALE_COMPLETE_MODEL,
+      model: UPSCALE_MODEL_ID,
       resolution: "4K",
       duration: resolved.durationInt,
       costUsd,
@@ -329,7 +303,7 @@ if (args.stage && !routeOwnedPending) {
       sourceResolution: resolutionString(resolved.sourceSpec),
       targetResolution: resolutionString(resolved.outputResolution),
       script: "upscaler.js",
-      argv: replayArgvWithEstimate(requestId, costUsd),
+      argv: replayArgvWithEstimate(costUsd),
     });
     if (!staged) {
       fail("infra", "failed to write draft sidecar");
@@ -338,7 +312,7 @@ if (args.stage && !routeOwnedPending) {
     emitSuccess({
       stage: "draft",
       job_id: jobId,
-      model: UPSCALE_COMPLETE_MODEL,
+      model: UPSCALE_MODEL_ID,
       cost_usd: costUsd,
       source_resolution: resolutionString(resolved.sourceSpec),
       target_resolution: resolutionString(resolved.outputResolution),
@@ -379,8 +353,7 @@ let exitCode = 0;
 let tmpAbsPath = null;
 try {
   const resolved = await resolveSource();
-  const { requestId, costUsd } = await ensureUpscaleRequest(resolved.sourceSpec, resolved.outputResolution);
-  lastUpscaleRequestId = requestId;
+  const { costUsd } = await ensureUpscaleQuote(resolved.sourceSpec);
   await writePending({
     jobId,
     kind: "video",
@@ -388,7 +361,7 @@ try {
     aspectRatio: resolved.aspectRatio,
     sourceNodeId: args["source-node-id"],
     referenceSourceIds: [],
-    model: UPSCALE_COMPLETE_MODEL,
+    model: UPSCALE_MODEL_ID,
     resolution: "4K",
     duration: resolved.durationInt,
     costUsd,
@@ -397,14 +370,12 @@ try {
     targetResolution: resolutionString(resolved.outputResolution),
   });
 
-  const { uploadUrl } = await acceptUpscale(requestId);
-  const uploadResult = await uploadUpscaleSource({
-    uploadUrl,
+  const { taskId } = await submitUpscale({
     filePath: resolved.filePath,
-    contentType: "video/mp4",
+    sourceSpec: resolved.sourceSpec,
   });
-  const { taskId } = await completeUpscale({ requestId, uploadResult });
   lastUpscaleTaskId = taskId;
+  lastUpscaleRequestId = taskId;
   const { videoUrl, durationSeconds } = await pollUpscale(taskId);
   lastProviderOutputUrl = videoUrl;
   const staged = await streamUrlToTmp({
@@ -430,17 +401,17 @@ try {
     aspect: actualAspectRatio,
     shot_id: null,
     metadata: {
-      source: "pai",
+      source: "deapi",
       task_type: "video_upscale",
       mode: UPSCALE_MODE_LABEL,
-      model: UPSCALE_COMPLETE_MODEL,
+      model: UPSCALE_MODEL_ID,
       resolution: "4K",
       aspect_ratio: actualAspectRatio,
       source_node_id: args["source-node-id"],
       source_resolution: resolutionString(resolved.sourceSpec),
       requested_output_resolution: resolutionString(resolved.outputResolution),
       output_resolution: resolutionString(actualOutputResolution),
-      upscale_request_id: requestId,
+      upscale_request_id: taskId,
       ...(typeof costUsd === "number" ? { estimated_cost_usd: costUsd } : {}),
       provider_output_url: videoUrl,
       generated_at: generatedAt,
@@ -478,11 +449,11 @@ try {
     output_url: url,
     local_path: localPath,
     provider_output_url: videoUrl,
-    model: UPSCALE_COMPLETE_MODEL,
+    model: UPSCALE_MODEL_ID,
     resolution: "4K",
     aspect_ratio: actualAspectRatio,
     duration: outputDurationInt,
-    upscale_request_id: requestId,
+    upscale_request_id: taskId,
     cost_usd: costUsd,
     poll_seconds: durationSeconds,
     generated_at: generatedAt,

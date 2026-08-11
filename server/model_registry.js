@@ -1,32 +1,38 @@
 // Single source of truth for the models pai-pro uses, indexed by
 // kind. Adding a model is one edit here; the provider clients import
-// getDefault(kind).id rather than inlining the string. The renderer
-// reads MODELS as JSON via the viewer's GET /models route — adding a
-// model auto-flows its label to canvas card chrome and the expand
-// overlay, no separate UI edit.
+// getDefault(kind) rather than inlining strings. The renderer reads
+// MODELS as JSON via the viewer's GET /models route — adding a model
+// auto-flows its label to canvas card chrome and the expand overlay,
+// no separate UI edit.
 //
-// Every capability routes through the PAI media API raw passthrough; the
-// `provider` field is therefore always `"pai"` and is kept only so
-// routes/system.js + web/lib/useModels.tsx don't need a schema change.
+// Every capability routes through the deAPI v2 media API
+// (https://deapi.ai — see server/deapi_client.js). The `id` field stays
+// a provider-neutral capability id (stamped onto canvas node
+// metadata.model and referenced by skills/templates); the deAPI model
+// slug actually sent on the wire lives in `deapi_slug` (and
+// `deapi_edit_slug` for the ref-based edit route) and is overridable
+// per-capability via env so accounts can pick different catalog models
+// without a code edit.
 //
 // Schema per entry:
-//   id              PAI raw model name (what we pass as `model` on
-//                   POST /api/v1/generate or /submit). Also stamped
+//   id              capability id (stable across providers). Stamped
 //                   onto canvas node metadata.model.
-//   provider        always "pai" in this codebase.
+//   provider        always "deapi" in this codebase.
 //   kind            "image" | "image_pro" | "video" | "voice" | "asset"
+//   deapi_slug      deAPI model slug for the primary route.
+//   deapi_edit_slug deAPI model slug for the ref-based edit route
+//                   (image kinds only).
 //   label           human-readable name (UI-friendly).
 //   cost_approx_usd number, function(params) -> number, or null when
-//                   unknown. Display-only; the actual freeze/charge
-//                   amount is whatever PAI bills. Used by the agent
-//                   for stage-gate cost previews.
+//                   unknown. Display-only; the clients fetch the exact
+//                   quote from deAPI's /price endpoints at call time.
+//                   Used by the agent for stage-gate cost previews.
 //   capabilities    tags for future routing / UI filters.
 //   default_params  sane defaults (informational; CLI parseArgs owns
 //                   runtime defaults).
 //   notes           one-liner for humans skimming the file.
 //   hidden          optional bool. true → omitted from GET /models
-//                   so it doesn't render as a card. Used by the
-//                   "asset" internal pricing row.
+//                   so it doesn't render as a card.
 //
 // v1 invariant: exactly one model per kind. getDefault() looks it up
 // directly.
@@ -36,7 +42,7 @@ import { fileURLToPath } from "node:url";
 import { config as dotenvConfig } from "dotenv";
 import {
   IMAGE_PRO_DEFAULT_SIZE,
-  imageProCostBySize,
+  imageProSizeTier,
 } from "./image_pro_sizes.js";
 
 // Load .env defensively. local_viewer.js calls config() after it has
@@ -47,36 +53,57 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenvConfig({ path: path.resolve(__dirname, "..", ".env") });
 
-// ── Cost functions ──────────────────────────────────────────────────
+function envSlug(name, fallback) {
+  const v = String(process.env[name] ?? "").trim();
+  return v || fallback;
+}
 
-// Image standard tier. Per-image pricing keyed off the imageSize
-// dimension.
+// ── Cost functions ──────────────────────────────────────────────────
+//
+// deAPI prices dynamically per task (resolution × steps for images,
+// pixels × frames for video, characters for TTS). The numbers below are
+// display-only approximations anchored to live /price readings from the
+// deAPI pricing table (2026-08); the clients quote the exact price via
+// POST /api/v2/<resource>/price before every paid call.
+
+// Image standard tier (Flux-class, 4 steps). Anchor: 1024x1024 ≈ $0.0027.
 function imageCostBySize(params = {}) {
   const size = String(params.image_size || params.imageSize || "2K").toLowerCase();
-  if (size === "1k") return 0.07;
-  if (size === "2k") return 0.10;
-  if (size === "4k") return 0.15;
-  return 0.10; // 2K default
+  if (size === "1k") return 0.003;
+  if (size === "2k") return 0.011;
+  if (size === "4k") return 0.043;
+  return 0.011; // 2K default
 }
 
-// Video tier. Per-second pricing scaled by resolution.
+// Image pro tier. Ref-less pro runs price like the standard tier;
+// ref-based edits are steps-driven and resolution-independent
+// (QwenImageEdit_Plus_NF4 @ 40 steps ≈ $0.035). Show the edit-path
+// ceiling so stage-gate previews don't undershoot.
+function imageProCostBySize(params = {}) {
+  const tier = imageProSizeTier(params.size || IMAGE_PRO_DEFAULT_SIZE);
+  const base = tier === "1K" ? 0.003 : tier === "4K" ? 0.043 : 0.011;
+  return Math.max(base, 0.035);
+}
+
+// Video tier (LTX-class). Anchor: 512x512 × 49 frames ≈ $0.038 →
+// ~3.0e-9 USD per pixel-frame. Assumes 24 fps.
 function videoCostByResAndDuration(params = {}) {
   const res = String(params.resolution || "720p").toLowerCase();
-  const dur = Number(params.duration) || 15;
-  const perSec = res === "1080p" ? 0.44 : res === "480p" ? 0.08 : 0.20;
-  return +(dur * perSec).toFixed(3);
+  const dur = Number(params.duration) || 5;
+  const [w, h] = res === "1080p" ? [1920, 1080] : res === "480p" ? [854, 480] : [1280, 720];
+  const frames = Math.round(dur * 24);
+  return +(w * h * frames * 3.0e-9).toFixed(3);
 }
 
-// Voice tier. Charged per 500 characters of input, rounded up
-// (100 chars → $0.01, 501 chars → $0.02). Caller passes `text` or
-// `text_chars` so this function works both at stage time (before the
-// CLI knows the audio duration) and at re-quote time.
+// Voice tier. deAPI TTS is priced per input character (Kokoro ≈
+// $0.77 per 1M chars; Qwen3 TTS models are in the same order of
+// magnitude). Kept block-rounded so stage previews never show $0.00.
 function voiceCostByChars(params = {}) {
   const chars = typeof params.text_chars === "number"
     ? params.text_chars
     : (typeof params.text === "string" ? params.text.length : 0);
-  if (chars <= 0) return 0.01; // minimum charge — even empty / 1-char buys one block
-  return +(Math.ceil(chars / 500) * 0.01).toFixed(2);
+  const usd = Math.max(chars, 1) * 0.77e-6;
+  return +Math.max(usd, 0.0001).toFixed(4);
 }
 
 // ── Registry ────────────────────────────────────────────────────────
@@ -85,61 +112,81 @@ export const MODELS = [
   // ───────────── image (standard tier) ─────────────
   {
     id: "image-generation",
-    provider: "pai",
+    provider: "deapi",
     kind: "image",
-    label: "Image (image-generation)",
+    deapi_slug: envSlug("DEAPI_IMAGE_MODEL", "Flux1schnell"),
+    deapi_edit_slug: envSlug("DEAPI_IMAGE_EDIT_MODEL", "QwenImageEdit_Plus_NF4"),
+    label: "Image (deAPI Flux / Qwen Edit)",
     cost_approx_usd: imageCostBySize,
     capabilities: ["text-to-image", "image-to-image", "multi-ref"],
     default_params: { aspect_ratio: "16:9", image_size: "2K" },
-    notes: "Sync image generation via PAI raw passthrough. Drafts, illustrative, stylized. ~10-30s.",
+    notes: "Async image generation via deAPI. Drafts, illustrative, stylized. Refs route to images/edits. ~10-60s.",
   },
 
   // ───────────── image (pro tier) ─────────────
   {
     id: "image-generation-pro",
-    provider: "pai",
+    provider: "deapi",
     kind: "image_pro",
-    label: "Image Pro (image-generation-pro)",
+    deapi_slug: envSlug("DEAPI_IMAGE_PRO_MODEL", "Flux_2_Klein_4B_BF16"),
+    deapi_edit_slug: envSlug("DEAPI_IMAGE_PRO_EDIT_MODEL", "QwenImageEdit_Plus_NF4"),
+    label: "Image Pro (deAPI Flux 2 / Qwen Edit)",
     cost_approx_usd: imageProCostBySize,
-    capabilities: ["text-to-image", "image-to-image", "multi-ref", "rendered-text"],
+    capabilities: ["text-to-image", "image-to-image", "multi-ref"],
     default_params: { size: IMAGE_PRO_DEFAULT_SIZE, output_format: "png" },
-    notes: "Sync pro image generation/editing via PAI raw passthrough. Routes refs internally to image-edit-pro. ~3 min.",
+    notes: "Async pro image generation/editing via deAPI. Edits run at the edit model's full default steps. ~1-4 min.",
   },
 
   // ───────────── video ─────────────
   {
     id: "video-generation",
-    provider: "pai",
+    provider: "deapi",
     kind: "video",
-    label: "Video (video-generation)",
+    deapi_slug: envSlug("DEAPI_VIDEO_MODEL", "Ltx2_3_22B_Dist_INT8"),
+    label: "Video (deAPI LTX-2)",
     cost_approx_usd: videoCostByResAndDuration,
-    capabilities: ["text-to-video", "image-to-video", "video-to-video", "audio"],
-    default_params: { duration: 15, aspect_ratio: "16:9", resolution: "720p", generate_audio: true },
-    notes: "Async video generation via PAI raw passthrough. Refs require public URLs (tunnel). ~3-6 min. Real money.",
+    capabilities: ["text-to-video", "image-to-video", "audio-to-video"],
+    default_params: { duration: 5, aspect_ratio: "16:9", resolution: "720p" },
+    notes: "Async video via deAPI: text-to-video, first/last-frame animation, or audio-sync. No video refs. ~2-8 min.",
   },
 
   // ───────────── voice ─────────────
   {
     id: "tts",
-    provider: "pai",
+    provider: "deapi",
     kind: "voice",
-    label: "Voice (tts)",
+    deapi_slug: envSlug("DEAPI_TTS_MODEL", "Kokoro"),
+    label: "Voice (deAPI TTS)",
     cost_approx_usd: voiceCostByChars,
-    capabilities: ["voice-design", "tts"],
+    capabilities: ["tts", "voice-design"],
     default_params: {},
-    notes: "Sync TTS via PAI raw passthrough. ~5-15s. $0.01 per 500 input characters.",
+    notes: "Async TTS via deAPI. voice_design mode when the model supports it, preset voices otherwise. ~5-30s.",
   },
 
-  // ───────────── asset preupload (internal) ─────────────
+  // ───────────── video upscale ─────────────
+  {
+    id: "video-upscale",
+    provider: "deapi",
+    kind: "upscale",
+    deapi_slug: envSlug("DEAPI_UPSCALE_MODEL", "FlashVSR_Tiny"),
+    label: "Upscaler (deAPI FlashVSR)",
+    cost_approx_usd: null, // quoted exactly via videos/upscales/price
+    capabilities: ["video-upscale"],
+    default_params: {},
+    notes: "Async video upscaling via deAPI. Cost quoted per call; scales linearly with duration. Hidden from cards.",
+    hidden: true,
+  },
+
+  // ───────────── asset preupload (retired with the PAI provider) ─────────────
   {
     id: "video-generation-assets",
-    provider: "pai",
+    provider: "deapi",
     kind: "asset",
-    label: "Asset preupload (video-generation-assets)",
-    cost_approx_usd: 0.01,
+    label: "Asset preupload (retired)",
+    cost_approx_usd: 0,
     capabilities: ["asset-upload"],
     default_params: {},
-    notes: "Reference preupload via PAI raw passthrough. ~$0.01 per ref. Internal; hidden from /models.",
+    notes: "deAPI takes refs as direct multipart uploads — no preupload step, no cost. Kept so getCost callers stay valid.",
     hidden: true,
   },
 ];

@@ -38,8 +38,8 @@ Clone the repo, add a PAI key, then start either Docker or host mode.
 git clone https://github.com/Utopai-Research/pai-pro.git ~/pai-pro
 cd ~/pai-pro
 cp .env.example .env
-# Get your PAI_KEY at https://pai-pro.utopaistudios.com/keys (format: PAI_<random>)
-printf "Paste your PAI_KEY: " && read -r key && sed -i.bak "s|^PAI_KEY=.*|PAI_KEY=$key|" .env && rm -f .env.bak
+# Get your DEAPI_KEY at https://app.deapi.ai/dashboard/api-keys
+printf "Paste your DEAPI_KEY: " && read -r key && sed -i.bak "s|^DEAPI_KEY=.*|DEAPI_KEY=$key|" .env && rm -f .env.bak
 ```
 
 | Mode | Claude Code | Codex CLI | Open |
@@ -175,7 +175,7 @@ proprietary-skills carve-out, and the CLA flow.
 
 ## Troubleshooting
 
-- Missing `PAI_KEY`: canvas, terminal, and notes work, but media generation
+- Missing `DEAPI_KEY`: canvas, terminal, and notes work, but media generation
   fails until `.env` has a key.
 - Missing Codex CLI: Claude-default starts warn only; Codex-default starts fail
   during preflight.

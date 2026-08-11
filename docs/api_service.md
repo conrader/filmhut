@@ -1,5 +1,7 @@
 # API Service
 
+> **This fork routes all media generation through [deAPI](https://deapi.ai) via `DEAPI_KEY`, not the PAI hosted service described below.** This document reflects the original upstream PAI service, not this fork.
+
 [PAI Pro Developer Platform](https://pai-pro.utopaistudios.com/) is the account
 console for the media API used by PAI-Pro. Sign in there to create and manage
 API keys, view submitted tasks and generated outputs, monitor balance and usage,

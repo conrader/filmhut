@@ -1,180 +1,167 @@
-// PAI raw passthrough → image-generation.
+// deAPI → standard image tier (capability id: image-generation).
 //
-// The wire shape is the upstream image model's native REST contract; PAI
-// forwards `payload` byte-for-byte. Returns
-// { bytes, mime, model, durationSeconds, costUsd } for the CLI.
+// Text-to-image routes to POST /api/v2/images/generations (JSON);
+// ref-based generation routes to POST /api/v2/images/edits (multipart,
+// local ref files uploaded directly — no tunnel, no preupload). Both are
+// async: submit returns request_id, the job is polled to terminal, and
+// the presigned result_url is downloaded to bytes.
 //
-// Reference: raw-models.md § "image-generation".
+// Returns { bytes, mime, model, durationSeconds, costUsd } for the CLI.
+// costUsd is the exact /price quote taken before submitting; when the
+// quote itself fails the generation still proceeds with costUsd null.
 //
-// Refs are URL-only — every entry in `refImageUrls` is sent as a
-// `fileData.fileUri` part. The upstream model fetches each URL
-// server-side. data: URIs are rejected at the boundary; if the caller
-// needs to pass a canvas-local file, they should route through
-// buildProviderRefs() so the tunnel-rewrite step runs first. Inline
-// data has a ~5-ref cap upstream; URL refs are validated to 16.
+// Refs are LOCAL FILE PATHS — every entry in `refImagePaths` must be an
+// absolute path to a mirrored project asset (from buildProviderRefs).
+// URLs are rejected at the boundary: deAPI takes the bytes as multipart
+// uploads, so there is nothing for a URL to do here.
 //
-// Safety blocks come back inside the 200 body (not as a 4xx). We detect
-// them by inspecting candidates[0].finishReason and
-// promptFeedback.blockReason and surface as content_filtered.
+// Contract reference: scratchpad copy of https://deapi.ai/llms.txt.
 
-import { callGenerate, err } from "./pai_client.js";
+import fs from "node:fs";
+import {
+  postJson,
+  postForm,
+  pollJob,
+  requestIdOf,
+  quotePrice,
+  getModelEntry,
+  downloadResult,
+  deriveDimensions,
+  deriveSteps,
+  err,
+} from "./deapi_client.js";
 import { getDefault } from "./model_registry.js";
 
-const MODEL = "image-generation";
-const TIMEOUT_MS = 120_000; // PAI sync ceiling is 120s; typical return is 10-30s.
+const SUBMIT_TIMEOUT_MS = 60_000;
+const POLL_TIMEOUT_MS = 10 * 60_000;
 
-// BLOCK_ONLY_HIGH on every safety category — the loosest the upstream
-// model allows. Tighter thresholds would unexpectedly filter prompts the
-// agent considers benign.
-const SAFETY_SETTINGS = [
-  { category: "HARM_CATEGORY_HARASSMENT",         threshold: "BLOCK_ONLY_HIGH" },
-  { category: "HARM_CATEGORY_HATE_SPEECH",        threshold: "BLOCK_ONLY_HIGH" },
-  { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT",  threshold: "BLOCK_ONLY_HIGH" },
-  { category: "HARM_CATEGORY_DANGEROUS_CONTENT",  threshold: "BLOCK_ONLY_HIGH" },
-];
+// Target long side per pai-pro size tier. Models with a smaller
+// max_width/height clamp down transparently (e.g. 4K on a 2048-max
+// model produces 2048).
+const LONG_SIDE_BY_TIER = { "1k": 1024, "2k": 2048, "4k": 4096 };
 
-function buildContents(prompt, refImageUrls) {
-  const promptStr = String(prompt);
-  const refs = Array.isArray(refImageUrls) ? refImageUrls.filter((u) => typeof u === "string" && u) : [];
-  const parts = [];
-  // Refs first so the model sees them before the instructional text.
-  for (const ref of refs) {
-    if (ref.startsWith("data:")) {
+function longSideForTier(imageSize) {
+  return LONG_SIDE_BY_TIER[String(imageSize || "2K").toLowerCase()] ?? 2048;
+}
+
+function validateRefPaths(refImagePaths) {
+  const refs = Array.isArray(refImagePaths)
+    ? refImagePaths.filter((p) => typeof p === "string" && p.trim() !== "")
+    : [];
+  for (const p of refs) {
+    if (/^(https?:|data:)/i.test(p)) {
       throw err(
         "bad_args",
-        "pai_image_client expects URL refs only — got a data: URI. Route through "
-        + "buildProviderRefs() so local files get rewritten to the cloudflared tunnel URL first.",
+        `pai_image_client expects local file paths for refs, got "${p.slice(0, 60)}" — `
+        + "resolve refs through buildProviderRefs() and pass absPath.",
       );
     }
-    parts.push({ fileData: { fileUri: ref } });
-  }
-  parts.push({ text: promptStr });
-  return [{ role: "user", parts }];
-}
-
-function buildImageConfig(aspectRatio, imageSize) {
-  const config = {};
-  if (aspectRatio) config.aspectRatio = aspectRatio;
-  if (imageSize) config.imageSize = imageSize;
-  return config;
-}
-
-// Walk the response and pull every inline image. Returns array of
-// { mimeType, data } so callers can pick the first or report all.
-function extractInlineImages(body) {
-  const candidates = Array.isArray(body?.candidates) ? body.candidates : [];
-  const out = [];
-  for (const cand of candidates) {
-    const parts = cand?.content?.parts;
-    if (!Array.isArray(parts)) continue;
-    for (const part of parts) {
-      const inline = part?.inlineData;
-      if (!inline || typeof inline.data !== "string" || !inline.data) continue;
-      out.push({
-        mimeType: typeof inline.mimeType === "string" && inline.mimeType
-          ? inline.mimeType
-          : "image/png",
-        data: inline.data,
-      });
+    if (!fs.existsSync(p)) {
+      throw err("bad_args", `image ref file not found: ${p}`);
     }
   }
-  return out;
+  return refs;
 }
 
-// Detect upstream safety / policy blocks. Returns a string reason
-// when the response indicates a block, or null when it looks healthy.
-function detectSafetyBlock(body) {
-  const promptBlock = body?.promptFeedback?.blockReason;
-  if (typeof promptBlock === "string" && promptBlock) return `promptFeedback.blockReason=${promptBlock}`;
-  const cand = body?.candidates?.[0];
-  if (cand) {
-    const reason = String(cand.finishReason || "").toUpperCase();
-    if (reason === "SAFETY" || reason === "PROHIBITED_CONTENT" || reason === "IMAGE_SAFETY") {
-      return `candidates[0].finishReason=${cand.finishReason}`;
-    }
-    if (reason === "BLOCKLIST" || reason === "RECITATION" || reason === "SPII") {
-      return `candidates[0].finishReason=${cand.finishReason}`;
-    }
+async function quoteOrNull(quote) {
+  try {
+    return await quote();
+  } catch (e) {
+    console.error(`[deapi-image] price quote failed (continuing without): ${e.message.slice(0, 120)}`);
+    return null;
   }
-  return null;
 }
 
 /**
- * Generate one image via PAI raw `image-generation`.
+ * Generate one image via deAPI.
  *
  * @param {Object}    opts
- * @param {string}    opts.prompt        text-to-image prompt
+ * @param {string}    opts.prompt        text-to-image / edit prompt
  * @param {string}    [opts.aspectRatio="16:9"]
- * @param {string}    [opts.imageSize="2K"]   "1K" or "2K"
- * @param {string[]}  [opts.refImageUrls]  parallel to provider-side refs;
- *                                         each entry MUST be a publicly-
- *                                         fetchable HTTPS URL (data: URIs
- *                                         are rejected at the boundary)
+ * @param {string}    [opts.imageSize="2K"]   "1K" | "2K" | "4K"
+ * @param {string[]}  [opts.refImagePaths]  absolute local paths of ref
+ *                                          images (routes to images/edits)
  *
  * @returns {Promise<{
  *   bytes: Buffer,
  *   mime: string,
  *   model: string,
  *   durationSeconds: number,
- *   costUsd: null
+ *   costUsd: number|null
  * }>}
  *
  * @throws  classified Error (.klass): bad_args / content_filtered /
  *          rate_limited / infra / transient / transient_exhausted
  */
-export async function generateImage({ prompt, aspectRatio, imageSize, refImageUrls } = {}) {
+export async function generateImage({ prompt, aspectRatio, imageSize, refImagePaths } = {}) {
   if (typeof prompt !== "string" || !prompt.trim()) {
     throw err("bad_args", "generateImage: prompt required");
   }
-  const payload = {
-    contents: buildContents(prompt, refImageUrls),
-    generationConfig: {
-      responseModalities: ["IMAGE"],
-      imageConfig: buildImageConfig(aspectRatio, imageSize),
-    },
-    safetySettings: SAFETY_SETTINGS,
-  };
+  const refs = validateRefPaths(refImagePaths);
+  const registryEntry = getDefault("image");
+  const slug = refs.length > 0 ? registryEntry.deapi_edit_slug : registryEntry.deapi_slug;
+
+  const modelEntry = await getModelEntry(slug, { logTag: "deapi-image" });
+  const { width, height } = deriveDimensions(modelEntry, {
+    aspectRatio,
+    longSide: longSideForTier(imageSize),
+  });
+  const steps = deriveSteps(modelEntry);
+  const maxRefs = Number(modelEntry?.info?.limits?.max_input_images) || 1;
+  if (refs.length > maxRefs) {
+    throw err("bad_args", `generateImage: model ${slug} accepts at most ${maxRefs} ref image(s), got ${refs.length}`);
+  }
 
   const started = Date.now();
-  const body = await callGenerate({
-    model: MODEL,
-    payload,
-    timeoutMs: TIMEOUT_MS,
-    logTag: "pai-image",
+  let requestId;
+  let costUsd;
+  if (refs.length === 0) {
+    const body = { prompt, model: slug, width, height, steps, seed: -1 };
+    costUsd = await quoteOrNull(() => quotePrice({
+      path: "images/generations",
+      body: { model: slug, width, height, steps },
+      logTag: "deapi-image",
+    }));
+    const submitted = await postJson({
+      path: "images/generations",
+      body,
+      timeoutMs: SUBMIT_TIMEOUT_MS,
+      logTag: "deapi-image",
+    });
+    requestId = requestIdOf(submitted, "images/generations");
+  } else {
+    costUsd = await quoteOrNull(() => quotePrice({
+      path: "images/edits",
+      body: { model: slug, steps, width, height },
+      logTag: "deapi-image",
+    }));
+    const files = refs.length === 1
+      ? [{ field: "image", filePath: refs[0] }]
+      : refs.map((p) => ({ field: "images[]", filePath: p }));
+    const submitted = await postForm({
+      path: "images/edits",
+      fields: { prompt, model: slug, seed: -1, steps, width, height },
+      files,
+      timeoutMs: SUBMIT_TIMEOUT_MS,
+      logTag: "deapi-image",
+    });
+    requestId = requestIdOf(submitted, "images/edits");
+  }
+
+  const job = await pollJob(requestId, {
+    timeoutMs: POLL_TIMEOUT_MS,
+    logTag: "deapi-image",
   });
-
-  // Upstream safety blocks land as 200 OK with no image. Check before
-  // diving into extractInlineImages — the message is more actionable when
-  // it names the block reason.
-  const block = detectSafetyBlock(body);
-  if (block) {
-    throw err("content_filtered", `image-generation safety block: ${block}`);
+  if (typeof job?.result_url !== "string" || !job.result_url) {
+    throw err("infra", `deAPI image job ${requestId} finished with no result_url`);
   }
+  const { bytes, mime } = await downloadResult(job.result_url);
 
-  const images = extractInlineImages(body);
-  if (!images.length) {
-    // 200 OK with no images: usually silent moderation, but unfetchable
-    // refs produce the same shape. Name the refs so the caller can tell
-    // the two apart.
-    const refHint = (refImageUrls?.length ?? 0) > 0
-      ? ` (with refs: ${refImageUrls.join(", ")} — verify these are publicly fetchable)`
-      : "";
-    throw err(
-      "content_filtered",
-      `image-generation returned 200 with no inline image${refHint} — silent moderation or unfetchable refs; reword the prompt or check the refs`,
-    );
-  }
-
-  const { mimeType, data } = images[0];
-  const bytes = Buffer.from(data, "base64");
-  if (!bytes.length) {
-    throw err("transient", "Decoded image bytes are empty");
-  }
   return {
     bytes,
-    mime: mimeType || "image/png",
-    model: getDefault("image").id,
+    mime,
+    model: registryEntry.id,
     durationSeconds: (Date.now() - started) / 1000,
-    costUsd: null, // PAI raw passthrough doesn't echo cost; agent shows model_registry's estimate
+    costUsd,
   };
 }

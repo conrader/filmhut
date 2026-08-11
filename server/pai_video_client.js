@@ -1,59 +1,118 @@
-// PAI raw passthrough → video-generation.
+// deAPI → video generation (capability id: video-generation).
 //
-// The wire payload is forwarded byte-for-byte to the upstream model, so
-// the `content[]` parts (with role: reference_image / reference_audio /
-// reference_video) and the top-level keys (`ratio`, `duration`,
-// `resolution`, `watermark`, `generate_audio`) read as the upstream
-// model expects them.
+// Three deAPI routes hide behind one submit call, picked from the refs:
 //
-// Reference: raw-models.md § "video-generation".
+//   no refs          → POST /api/v2/videos/generations   (JSON, txt2video)
+//   1-2 image refs   → POST /api/v2/videos/animations    (multipart;
+//                       first_frame_image + optional last_frame_image on
+//                       models advertising supports_last_frame)
+//   1 audio ref      → POST /api/v2/videos/audio-syncs   (multipart; the
+//                       audio conditions the clip; image refs may ride
+//                       along as first/last frame)
+//
+// Video refs are NOT supported by deAPI's video endpoints — callers get
+// a clear bad_args instead of a silent drop.
+//
+// Refs are LOCAL FILE PATHS (from buildProviderRefs().absPath); deAPI
+// takes the bytes as multipart uploads, so there is no preupload step
+// and no tunnel dependency.
+//
+// width/height/frames/fps/steps are derived from the configured model's
+// catalog entry (info.limits is authoritative; several models pin fps
+// or steps to a single legal value). duration is converted to frames at
+// the model's fps and clamped into min/max_frames — the effective clip
+// length can therefore differ from the requested duration; the submit
+// result reports the effective plan.
 //
 // Two exported functions split the submit / poll flow:
 //
-//   submitVideo({ ... })       → POST /api/v1/submit, returns { taskId, raw }
-//   pollVideo(taskId, opts)    → polls /api/v1/task/status/{id} to terminal,
-//                                returns { videoUrl, raw, durationSeconds }
+//   submitVideo({ ... })    → returns { taskId, raw, costUsd, effective }
+//   pollVideo(taskId, opts) → polls /api/v2/jobs/{id} to terminal,
+//                             returns { videoUrl, raw, durationSeconds }
 //
 // The resolved MP4 is fetched by the caller (generate_video.js) via
-// local_mirror.js's streamUrlToTmp, which streams the body straight to
-// disk instead of buffering tens of MB per clip in RAM.
+// local_mirror.js's streamUrlToTmp. NOTE: the presigned result_url
+// expires — stream it promptly after pollVideo resolves.
 
-import { callSubmit, pollStatus, err } from "./pai_client.js";
+import fs from "node:fs";
+import {
+  postJson,
+  postForm,
+  pollJob,
+  requestIdOf,
+  quotePrice,
+  getModelEntry,
+  deriveDimensions,
+  deriveSteps,
+  err,
+} from "./deapi_client.js";
+import { getDefault } from "./model_registry.js";
 
-const MODEL = "video-generation";
-const SUBMIT_TIMEOUT_MS = 30_000;
+const SUBMIT_TIMEOUT_MS = 120_000;
 const POLL_INTERVAL_MS = 5_000;
-const POLL_TIMEOUT_MS = 30 * 60_000; // 30 min per PAI docs recommendation
+const POLL_TIMEOUT_MS = 30 * 60_000;
 
-// Video model endpoint id forwarded inside payload.model. PAI never
-// remaps this. Endpoint rotations are rare; a code edit + one-line PR
-// is the right cadence.
-const PAI_VIDEO_ENDPOINT_ID = "pai-pro-video-endpoint-01";
+const RES_TO_HEIGHT = { "480p": 480, "720p": 720, "1080p": 1080 };
 
-function buildContent({ prompt, imageAssetIds, audioAssetIds, videoAssetIds }) {
-  const content = [{ type: "text", text: String(prompt) }];
-  for (const id of imageAssetIds) {
-    content.push({
-      type: "image_url",
-      image_url: { url: `asset://${id}` },
-      role: "reference_image",
-    });
+function validatePaths(paths, kind) {
+  const list = Array.isArray(paths)
+    ? paths.filter((p) => typeof p === "string" && p.trim() !== "")
+    : [];
+  for (const p of list) {
+    if (/^(https?:|data:)/i.test(p)) {
+      throw err("bad_args", `submitVideo: ${kind} refs must be local file paths, got "${p.slice(0, 60)}"`);
+    }
+    if (!fs.existsSync(p)) throw err("bad_args", `submitVideo: ${kind} ref file not found: ${p}`);
   }
-  for (const id of audioAssetIds) {
-    content.push({
-      type: "audio_url",
-      audio_url: { url: `asset://${id}` },
-      role: "reference_audio",
-    });
+  return list;
+}
+
+// Derive the full legal parameter set for this generation from the
+// model's catalog entry.
+function deriveVideoPlan(modelEntry, { aspectRatio, resolution, duration }) {
+  const limits = modelEntry?.info?.limits ?? {};
+  const defaults = modelEntry?.info?.defaults ?? {};
+
+  const targetH = RES_TO_HEIGHT[String(resolution || "720p").toLowerCase()] ?? 720;
+  const m = /^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/.exec(String(aspectRatio || "16:9").trim());
+  const ratio = m ? Number(m[1]) / Number(m[2]) : 16 / 9;
+  const longSide = ratio >= 1 ? Math.round(targetH * ratio) : targetH;
+  const { width, height } = deriveDimensions(modelEntry, { aspectRatio, longSide });
+
+  // fps is usually pinned (min == max); prefer defaults, then the floor.
+  const fps = Number(defaults.fps)
+    || Number(limits.min_fps)
+    || Number(limits.max_fps)
+    || 24;
+  const wantFrames = Math.round((Number(duration) || 5) * fps);
+  const minFrames = Number(limits.min_frames) || 1;
+  const maxFrames = Number(limits.max_frames) || wantFrames;
+  const frames = Math.min(Math.max(wantFrames, minFrames), maxFrames);
+
+  // Some models (Ltx2_3_22B_Dist_INT8) require steps >= 8 while
+  // advertising supports_steps: false — limits stay authoritative, with
+  // 8 as the fallback floor when the catalog is silent.
+  const steps = deriveSteps(modelEntry, Number(defaults.steps) || 8);
+  const guidance = Number(defaults.guidance) || 3;
+
+  return {
+    width,
+    height,
+    fps,
+    frames,
+    steps,
+    guidance,
+    effectiveDurationSec: +(frames / fps).toFixed(2),
+  };
+}
+
+async function quoteOrNull(pricePath, body, logTag) {
+  try {
+    return await quotePrice({ path: pricePath, body, logTag });
+  } catch (e) {
+    console.error(`[${logTag}] price quote failed (continuing without): ${e.message.slice(0, 120)}`);
+    return null;
   }
-  for (const id of videoAssetIds) {
-    content.push({
-      type: "video_url",
-      video_url: { url: `asset://${id}` },
-      role: "reference_video",
-    });
-  }
-  return content;
 }
 
 /**
@@ -61,90 +120,166 @@ function buildContent({ prompt, imageAssetIds, audioAssetIds, videoAssetIds }) {
  *
  * @param {Object}    opts
  * @param {string}    opts.prompt
- * @param {number}    [opts.duration=15]
+ * @param {number}    [opts.duration=5]      requested seconds; clamped to
+ *                                           the model's frame budget
  * @param {string}    [opts.aspectRatio="16:9"]
  * @param {string}    [opts.resolution="720p"]
- * @param {boolean}   [opts.generateAudio=true]
- * @param {string[]}  [opts.imageAssetIds=[]]   from prior uploadReferences()
- * @param {string[]}  [opts.audioAssetIds=[]]
- * @param {string[]}  [opts.videoAssetIds=[]]
+ * @param {boolean}   [opts.generateAudio=true]  accepted for CLI
+ *                                           compatibility; audio comes
+ *                                           from the model/route, not a
+ *                                           toggle, on deAPI
+ * @param {string[]}  [opts.imageRefPaths=[]]  0-2 local image files
+ *                                           (first frame, optional last)
+ * @param {string[]}  [opts.audioRefPaths=[]]  0-1 local audio file
+ *                                           (routes to audio-syncs)
+ * @param {string[]}  [opts.videoRefPaths=[]]  must be empty — rejected
  *
- * @returns {Promise<{ taskId: string, raw: object }>}
+ * @returns {Promise<{ taskId: string, raw: object, costUsd: number|null,
+ *                     effective: object }>}
  *
  * @throws  classified Error (.klass): bad_args / rate_limited / infra /
  *          transient / transient_exhausted
  */
 export async function submitVideo({
   prompt,
-  duration = 15,
+  duration = 5,
   aspectRatio = "16:9",
   resolution = "720p",
-  generateAudio = true,
-  imageAssetIds = [],
-  audioAssetIds = [],
-  videoAssetIds = [],
+  generateAudio = true, // eslint-disable-line no-unused-vars
+  imageRefPaths = [],
+  audioRefPaths = [],
+  videoRefPaths = [],
 } = {}) {
   if (typeof prompt !== "string" || !prompt.trim()) {
     throw err("bad_args", "submitVideo: empty prompt");
   }
-  const payload = {
-    model: PAI_VIDEO_ENDPOINT_ID,
-    content: buildContent({ prompt, imageAssetIds, audioAssetIds, videoAssetIds }),
-    generate_audio: !!generateAudio,
-    ratio: aspectRatio,
-    duration: Number(duration),
-    resolution,
-    watermark: false,
+  const images = validatePaths(imageRefPaths, "image");
+  const audios = validatePaths(audioRefPaths, "audio");
+  const videos = validatePaths(videoRefPaths, "video");
+
+  if (videos.length > 0) {
+    throw err("bad_args",
+      "submitVideo: deAPI video generation does not accept video refs — "
+      + "use image refs (first/last frame) or an audio ref, or extract a frame via extract_frames.js.");
+  }
+  if (audios.length > 1) {
+    throw err("bad_args", `submitVideo: at most 1 audio ref (got ${audios.length})`);
+  }
+  if (images.length > 2) {
+    throw err("bad_args",
+      `submitVideo: at most 2 image refs — first frame + optional last frame (got ${images.length})`);
+  }
+
+  const registryEntry = getDefault("video");
+  const modelEntry = await getModelEntry(registryEntry.deapi_slug, { logTag: "deapi-video" });
+  const inferenceTypes = Array.isArray(modelEntry?.inference_types) ? modelEntry.inference_types : [];
+  const supportsLastFrame = modelEntry?.info?.features?.supports_last_frame === true;
+  if (images.length === 2 && !supportsLastFrame) {
+    throw err("bad_args",
+      `submitVideo: model ${modelEntry.slug} does not advertise last-frame support — pass a single image ref`);
+  }
+
+  const plan = deriveVideoPlan(modelEntry, { aspectRatio, resolution, duration });
+  const numericParams = {
+    model: modelEntry.slug,
+    width: plan.width,
+    height: plan.height,
+    guidance: plan.guidance,
+    steps: plan.steps,
+    frames: plan.frames,
+    fps: plan.fps,
   };
 
-  const env = await callSubmit({
-    model: MODEL,
-    payload,
-    timeoutMs: SUBMIT_TIMEOUT_MS,
-    logTag: "pai-video",
-  });
-  return { taskId: env.job_id, raw: env };
-}
+  let route;
+  let submitted;
+  let costUsd;
+  if (audios.length === 1) {
+    route = "videos/audio-syncs";
+    if (!inferenceTypes.includes("audio2video")) {
+      throw err("bad_args",
+        `submitVideo: model ${modelEntry.slug} does not support audio-conditioned video (audio2video). `
+        + "Set DEAPI_VIDEO_MODEL to a model that does, or drop the audio ref.");
+    }
+    costUsd = await quoteOrNull(route, numericParams, "deapi-video");
+    const files = [{ field: "audio", filePath: audios[0] }];
+    if (images[0]) files.push({ field: "first_frame_image", filePath: images[0] });
+    if (images[1]) files.push({ field: "last_frame_image", filePath: images[1] });
+    submitted = await postForm({
+      path: route,
+      fields: { prompt, seed: -1, ...numericParams },
+      files,
+      timeoutMs: SUBMIT_TIMEOUT_MS,
+      logTag: "deapi-video",
+    });
+  } else if (images.length >= 1) {
+    route = "videos/animations";
+    if (!inferenceTypes.includes("img2video")) {
+      throw err("bad_args",
+        `submitVideo: model ${modelEntry.slug} does not support image-to-video (img2video). `
+        + "Set DEAPI_VIDEO_MODEL to a model that does, or drop the image refs.");
+    }
+    costUsd = await quoteOrNull(route, numericParams, "deapi-video");
+    const files = [{ field: "first_frame_image", filePath: images[0] }];
+    if (images[1]) files.push({ field: "last_frame_image", filePath: images[1] });
+    submitted = await postForm({
+      path: route,
+      fields: { prompt, seed: -1, ...numericParams },
+      files,
+      timeoutMs: SUBMIT_TIMEOUT_MS,
+      logTag: "deapi-video",
+    });
+  } else {
+    route = "videos/generations";
+    if (!inferenceTypes.includes("txt2video")) {
+      throw err("bad_args",
+        `submitVideo: model ${modelEntry.slug} does not support text-to-video (txt2video). `
+        + "Set DEAPI_VIDEO_MODEL to a model that does, or add an image ref.");
+    }
+    costUsd = await quoteOrNull(route, numericParams, "deapi-video");
+    submitted = await postJson({
+      path: route,
+      body: { prompt, seed: -1, ...numericParams },
+      timeoutMs: SUBMIT_TIMEOUT_MS,
+      logTag: "deapi-video",
+    });
+  }
 
-// Prefer PAI's long-lived rehosted URL (`output_url`); fall back to the
-// upstream signed URL inside `raw_response`. If neither path resolves,
-// pollVideo throws `infra`.
-function findVideoUrl(resp) {
-  if (typeof resp?.output_url === "string" && resp.output_url) return resp.output_url;
-  const inner = resp?.raw_response;
-  if (typeof inner?.video_url === "string" && inner.video_url) return inner.video_url;
-  if (typeof inner?.content?.video_url === "string" && inner.content.video_url) return inner.content.video_url;
-  return "";
+  const taskId = requestIdOf(submitted, route);
+  return {
+    taskId,
+    raw: submitted,
+    costUsd,
+    effective: { route, model: modelEntry.slug, ...plan },
+  };
 }
 
 /**
- * Poll PAI for the task's terminal status. On SUCCESS, returns the
- * resolved video URL + the raw response + wall-clock seconds. On
- * FAILED, throws a classified error.
+ * Poll a submitted video task to terminal state.
  *
- * @param {string}   taskId
+ * @param {string}   taskId    request_id from submitVideo
  * @param {Object}   [opts]
- * @param {function} [opts.onProgress]  invoked with { status, elapsedSec }
+ * @param {function} [opts.onProgress]  ({ status, progress, elapsedSec })
  *
  * @returns {Promise<{ videoUrl: string, raw: object, durationSeconds: number }>}
+ *          videoUrl is a presigned URL that EXPIRES — download promptly.
+ *
+ * @throws  classified Error: content_filtered / bad_args / infra /
+ *          rate_limited / transient_exhausted (see deapi_client.js)
  */
 export async function pollVideo(taskId, { onProgress } = {}) {
   const started = Date.now();
-  const resp = await pollStatus(taskId, {
+  const job = await pollJob(taskId, {
     intervalMs: POLL_INTERVAL_MS,
     timeoutMs: POLL_TIMEOUT_MS,
     onProgress,
+    logTag: "deapi-video",
   });
-  const videoUrl = findVideoUrl(resp);
-  if (!videoUrl) {
-    throw err(
-      "infra",
-      `PAI task ${taskId} reached SUCCESS but response carried no video URL: ${JSON.stringify(resp).slice(0, 300)}`,
-    );
+  if (typeof job?.result_url !== "string" || !job.result_url) {
+    throw err("infra", `deAPI video job ${taskId} finished with no result_url`);
   }
   return {
-    videoUrl,
-    raw: resp,
+    videoUrl: job.result_url,
+    raw: job,
     durationSeconds: (Date.now() - started) / 1000,
   };
 }

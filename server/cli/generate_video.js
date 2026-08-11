@@ -1,22 +1,23 @@
 #!/usr/bin/env node
-// CLI wrapper for video generation via PAI raw passthrough
-// (model id: video-generation). Synchronous from the caller's POV —
-// typical wall-clock is 2-4 min, so plan accordingly.
+// CLI wrapper for video generation via deAPI
+// (capability id: video-generation). Synchronous from the caller's POV —
+// typical wall-clock is 2-8 min, so plan accordingly.
 //
-// Refs: every ref is a canvas node id (--ref-source-id for image / video
+// Refs: every ref is a canvas node id (--ref-source-id for image
 // sources, --ref-audio-source-id for audio sources). buildProviderRefs
-// resolves each source's local_path and rewrites the host to the
-// cloudflared tunnel origin via .tunnel_url (written by scripts/start.sh),
-// so PAI's video-generation-assets endpoint can fetch the bytes
-// server-side. External URLs are mirrored onto the canvas first via
-// mirror_url.js; no separate URL-passthrough flag.
+// resolves each source's local_path to the absolute on-disk file, and
+// the client uploads the bytes to deAPI directly as multipart form data
+// — no preupload, no tunnel. Image refs map to first/last frame
+// (max 2); one audio ref routes to the audio-sync endpoint; video refs
+// are not supported by deAPI's video endpoints. External URLs are
+// mirrored onto the canvas first via mirror_url.js; no separate
+// URL-passthrough flag.
 
 import path from "node:path";
 import fs from "node:fs/promises";
 import { parseArgs, emitSuccess, emitFailure, classify, isoNow, truncateLabel } from "./_cli.js";
 import { submitVideo, pollVideo } from "../pai_video_client.js";
 import { getDefault, getCost } from "../model_registry.js";
-import { uploadReferences } from "../pai_assets_client.js";
 import { kickPreupload } from "./_preupload_hook.js";
 import {
   streamUrlToTmp,
@@ -137,21 +138,15 @@ if (args["auto-run-id"] !== undefined) {
   }
 }
 
-// Asset preupload through PAI's video-generation-assets costs ~$0.01 per
-// ref. Count canvas source-ids once each across image + video + audio refs.
-function countUniqueRefs() {
-  const sids = new Set([...refSourcesArg, ...audSrcIds]);
-  return sids.size;
-}
-
 if (args.stage && !routeOwnedPending) {
+  // deAPI uploads refs inline with the generation call — no per-ref
+  // preupload cost. The staged figure is the registry's display
+  // approximation; the client fetches the exact /price quote at run time.
   const videoCost = getCost(plannedModel, {
     resolution: args.resolution,
     duration: durationPlanned,
   });
-  const refCount = countUniqueRefs();
-  const assetCost = refCount * (getCost("video-generation-assets") ?? 0.01);
-  const costUsd = +(Number(videoCost ?? 0) + assetCost).toFixed(3);
+  const costUsd = +Number(videoCost ?? 0).toFixed(3);
   const autoRunId = args["auto-run-id"] || null;
   const autoProjectId = autoRunId
     ? args["project-id"] || (await readActiveProject().catch(() => null))
@@ -288,33 +283,15 @@ try {
   const resolvedAudios = await buildProviderRefs({ sourceIds: audSrcIds, projectId });
   const resolvedVideos = await buildProviderRefs({ sourceIds: vidSrcIds, projectId });
 
-  let assetIds = { images: [], audios: [], videos: [] };
-  if (resolvedImages.length || resolvedAudios.length || resolvedVideos.length) {
-    try {
-      assetIds = await uploadReferences({
-        images: resolvedImages,
-        audios: resolvedAudios,
-        videos: resolvedVideos,
-      });
-    } catch (e) {
-      const extra = e.assetRejected
-        ? { failed_url: e.failedUrl || null, kind: e.kind || null }
-        : (e.retryAfterSec ? { retryAfterSec: e.retryAfterSec } : {});
-      fail(e.assetRejected ? "asset_rejected" : classify(e), e.message, extra);
-      exitCode = 1;
-      throw e;
-    }
-  }
-
-  const { taskId } = await submitVideo({
+  const { taskId, costUsd, effective } = await submitVideo({
     prompt: args.prompt,
     duration: durationInt,
     aspectRatio: args["aspect-ratio"],
     resolution: args.resolution,
     generateAudio: !args["no-audio"],
-    imageAssetIds: assetIds.images,
-    audioAssetIds: assetIds.audios,
-    videoAssetIds: assetIds.videos,
+    imageRefPaths: resolvedImages.map((r) => r.absPath),
+    audioRefPaths: resolvedAudios.map((r) => r.absPath),
+    videoRefPaths: resolvedVideos.map((r) => r.absPath),
   });
 
   const { videoUrl, durationSeconds } = await pollVideo(taskId);
@@ -339,7 +316,7 @@ try {
     aspect: args["aspect-ratio"],
     shot_id: Number.isFinite(shotId) ? shotId : null,
     metadata: {
-      source: "pai",
+      source: "deapi",
       task_type: "video_generation",
       model: plannedModel,
       duration: durationInt,
@@ -347,9 +324,12 @@ try {
       resolution: args.resolution,
       generate_audio: !args["no-audio"],
       generated_at: generatedAt,
-      // PAI's signed GCS URL (~24h TTL). Surfaced for future re-download
-      // paths; the canvas URL itself is always derived from local_path.
+      // deAPI's presigned result URL (expires quickly). Surfaced for
+      // debugging; the canvas URL itself is always derived from local_path.
       provider_output_url: videoUrl,
+      // Effective plan after clamping into the model's limits (frames,
+      // fps, snapped dimensions) — can differ from the requested params.
+      effective_plan: effective,
       pending_job_id: jobId,
     },
   };
@@ -397,6 +377,8 @@ try {
     aspect_ratio: args["aspect-ratio"],
     resolution: args.resolution,
     generate_audio: !args["no-audio"],
+    cost_usd: costUsd ?? null,
+    effective_plan: effective,
     poll_seconds: durationSeconds,
     generated_at: generatedAt,
   };

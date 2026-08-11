@@ -6,7 +6,7 @@ Claude Code users should rerun `./scripts/setup --agent claude` and restart the 
 
 ## Generation fails with `bad_args`
 
-Either `.env` is missing `PAI_KEY`, or you asked for a video/image-pro edit with a local ref and the tunnel isn't running. Re-run `./scripts/start.sh`; if `cloudflared` is missing, install it (macOS: `brew install cloudflared`; Linux/Windows: <https://github.com/cloudflare/cloudflared/releases>) and re-run.
+Either `.env` is missing `DEAPI_KEY`, or you asked for a video/image-pro edit with a local ref and the tunnel isn't running. Note: media refs now upload directly to deAPI and no longer need the tunnel — this only applies to other tunnel-dependent paths. Re-run `./scripts/start.sh`; if `cloudflared` is missing, install it (macOS: `brew install cloudflared`; Linux/Windows: <https://github.com/cloudflare/cloudflared/releases>) and re-run.
 
 For external media refs, mirror the URL onto the canvas first with `mirror_url.js --url <URL>`, then pass the returned node id via `--ref-source-id`.
 
@@ -16,7 +16,7 @@ The agent may have mirrored to the wrong project (stale `.active_project`). Relo
 
 ## Can I run this without an API key?
 
-Yes — canvas, terminal, and notes work. Media generation just fails with a clean `infra`-class error ("PAI_KEY not set in env") until you add the key.
+Yes — canvas, terminal, and notes work. Media generation just fails with a clean `infra`-class error ("DEAPI_KEY not set in env") until you add the key.
 
 ## How do I add a new skill?
 

@@ -1,62 +1,31 @@
-// Unit tests for pai_image_client. Mocks globalThis.fetch — the generated
-// image comes back base64-encoded inside the JSON body (inlineData), so the
-// whole round trip is a single POST /api/v1/generate with no download hop.
+// Unit tests for pai_image_client (deAPI-backed). Mocks globalThis.fetch
+// via the shared deapi_fetch_mock helper — a generation is submit (POST)
+// → job poll (GET /api/v2/jobs/:id) → result download from the presigned
+// result_url.
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import { generateImage } from "../pai_image_client.js";
+import {
+  installDeapiFetch,
+  jsonResponse,
+  errorJob,
+  PNG_BYTES,
+} from "./helpers/deapi_fetch_mock.js";
 
-const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-const PNG_B64 = PNG_BYTES.toString("base64");
-
-function jsonResponse(body, status = 200, headers = {}) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json", ...headers },
-  });
+function writeTmpPng(t) {
+  const p = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "deapi-img-test-")), "ref.png");
+  fs.writeFileSync(p, PNG_BYTES);
+  t.after(() => fs.rmSync(path.dirname(p), { recursive: true, force: true }));
+  return p;
 }
 
-function installPaiFetch(t, handler) {
-  const priorFetch = globalThis.fetch;
-  const priorKey = process.env.PAI_KEY;
-  const priorBase = process.env.PAI_API_BASE;
-  const calls = [];
-
-  globalThis.fetch = async (url, opts = {}) => {
-    let body = null;
-    try { body = JSON.parse(opts.body || "null"); } catch {}
-    const entry = { url: String(url), method: opts.method, body };
-    calls.push(entry);
-    return handler(entry);
-  };
-  process.env.PAI_KEY = "PAI_test";
-  process.env.PAI_API_BASE = "https://pai.test";
-
-  t.after(() => {
-    globalThis.fetch = priorFetch;
-    if (priorKey === undefined) delete process.env.PAI_KEY;
-    else process.env.PAI_KEY = priorKey;
-    if (priorBase === undefined) delete process.env.PAI_API_BASE;
-    else process.env.PAI_API_BASE = priorBase;
-  });
-
-  return calls;
-}
-
-function inlineImageBody({ data = PNG_B64, mimeType = "image/png" } = {}) {
-  return {
-    candidates: [
-      {
-        finishReason: "STOP",
-        content: { parts: [{ inlineData: { mimeType, data } }] },
-      },
-    ],
-  };
-}
-
-test("generateImage sends the raw image-generation payload and decodes the inline image", async (t) => {
-  const calls = installPaiFetch(t, () => jsonResponse(inlineImageBody()));
+test("generateImage submits to images/generations and downloads the result", async (t) => {
+  const calls = installDeapiFetch(t);
 
   const result = await generateImage({
     prompt: "a foggy harbor at dawn",
@@ -68,165 +37,190 @@ test("generateImage sends the raw image-generation payload and decodes the inlin
   assert.equal(result.mime, "image/png");
   assert.equal(result.model, "image-generation");
   assert.equal(typeof result.durationSeconds, "number");
-  assert.ok(result.durationSeconds >= 0);
-  assert.equal(result.costUsd, null);
+  assert.equal(result.costUsd, 0.0042); // from the mocked /price quote
 
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].url, "https://pai.test/api/v1/generate");
-  assert.equal(calls[0].method, "POST");
-  const { model, payload } = calls[0].body;
-  assert.equal(model, "image-generation");
-  assert.deepEqual(payload.contents, [
-    { role: "user", parts: [{ text: "a foggy harbor at dawn" }] },
-  ]);
-  assert.deepEqual(payload.generationConfig, {
-    responseModalities: ["IMAGE"],
-    imageConfig: { aspectRatio: "16:9", imageSize: "2K" },
-  });
-  assert.deepEqual(payload.safetySettings.map((s) => s.category), [
-    "HARM_CATEGORY_HARASSMENT",
-    "HARM_CATEGORY_HATE_SPEECH",
-    "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-    "HARM_CATEGORY_DANGEROUS_CONTENT",
-  ]);
-  assert.ok(payload.safetySettings.every((s) => s.threshold === "BLOCK_ONLY_HIGH"));
+  const submit = calls.find((c) => c.url === "https://deapi.test/api/v2/images/generations" && c.method === "POST");
+  assert.ok(submit, "expected a POST to images/generations");
+  assert.equal(submit.body.prompt, "a foggy harbor at dawn");
+  assert.equal(submit.body.model, "Flux1schnell");
+  assert.equal(submit.body.seed, -1);
+  // 2K long side 2048 at 16:9 snapped to Flux's 128px grid within 2048 max.
+  assert.equal(submit.body.width, 2048);
+  assert.equal(submit.body.height, 1152);
+  // steps from the catalog defaults, inside min/max.
+  assert.equal(submit.body.steps, 4);
+
+  const priced = calls.find((c) => c.url.endsWith("/api/v2/images/generations/price"));
+  assert.ok(priced, "expected a price quote before submit");
+  const polled = calls.find((c) => c.url.includes("/api/v2/jobs/req-1"));
+  assert.ok(polled, "expected a job status poll");
 });
 
-test("generateImage sends URL refs as fileData parts before the prompt text", async (t) => {
-  const calls = installPaiFetch(t, () => jsonResponse(inlineImageBody({ mimeType: "image/jpeg" })));
+test("generateImage routes refs to images/edits as multipart file uploads", async (t) => {
+  const refPath = writeTmpPng(t);
+  const calls = installDeapiFetch(t);
 
   const result = await generateImage({
     prompt: "match the reference style",
-    refImageUrls: ["https://example.com/a.png", "", 42, "https://example.com/b.png"],
+    refImagePaths: [refPath],
+  });
+  assert.deepEqual(result.bytes, PNG_BYTES);
+
+  const submit = calls.find((c) => c.url === "https://deapi.test/api/v2/images/edits" && c.method === "POST");
+  assert.ok(submit, "expected a POST to images/edits");
+  assert.ok(submit.form, "edit submit must be multipart form data");
+  assert.equal(submit.form.prompt, "match the reference style");
+  assert.equal(submit.form.model, "QwenImageEdit_Plus_NF4");
+  assert.equal(submit.form.image.filename, "ref.png");
+  assert.equal(submit.form.image.size, PNG_BYTES.length);
+});
+
+test("generateImage sends two refs as images[] and enforces the model's max_input_images", async (t) => {
+  const refA = writeTmpPng(t);
+  const refB = writeTmpPng(t);
+  const calls = installDeapiFetch(t);
+
+  await generateImage({ prompt: "combine them", refImagePaths: [refA, refB] });
+  const submit = calls.find((c) => c.url.endsWith("/api/v2/images/edits"));
+  assert.ok(Array.isArray(submit.form["images[]"]));
+  assert.equal(submit.form["images[]"].length, 2);
+
+  // Catalog caps QwenImageEdit_Plus_NF4 at 3 input images.
+  await assert.rejects(
+    generateImage({ prompt: "too many", refImagePaths: [refA, refB, refA, refB] }),
+    (e) => e.klass === "bad_args" && /at most 3/.test(e.message),
+  );
+});
+
+test("generateImage validates prompt and rejects URL/data: refs before any provider call", async (t) => {
+  const calls = installDeapiFetch(t);
+
+  await assert.rejects(generateImage({}), (e) => e.klass === "bad_args" && /prompt required/.test(e.message));
+  await assert.rejects(
+    generateImage({ prompt: "x", refImagePaths: ["https://example.com/a.png"] }),
+    (e) => e.klass === "bad_args" && /local file paths/.test(e.message),
+  );
+  await assert.rejects(
+    generateImage({ prompt: "x", refImagePaths: ["data:image/png;base64,abcd"] }),
+    (e) => e.klass === "bad_args",
+  );
+  await assert.rejects(
+    generateImage({ prompt: "x", refImagePaths: ["/definitely/missing/ref.png"] }),
+    (e) => e.klass === "bad_args" && /not found/.test(e.message),
+  );
+  assert.equal(calls.filter((c) => c.method === "POST").length, 0, "no paid calls on validation failures");
+});
+
+test("generateImage maps a job error with AGE_RESTRICTED to content_filtered", async (t) => {
+  installDeapiFetch(t, {
+    handler(entry) {
+      if (entry.url.includes("/api/v2/jobs/")) {
+        return jsonResponse(errorJob({ error_code: "AGE_RESTRICTED", error_message: "flagged" }));
+      }
+      return undefined;
+    },
   });
 
-  assert.equal(result.mime, "image/jpeg");
-  const parts = calls[0].body.payload.contents[0].parts;
-  // Non-string / empty entries are silently dropped; refs precede the text.
-  assert.deepEqual(parts, [
-    { fileData: { fileUri: "https://example.com/a.png" } },
-    { fileData: { fileUri: "https://example.com/b.png" } },
-    { text: "match the reference style" },
-  ]);
-  // aspectRatio / imageSize omitted → imageConfig stays empty. The JSDoc
-  // defaults ("16:9" / "2K") are applied by the CLI, not here.
-  assert.deepEqual(calls[0].body.payload.generationConfig.imageConfig, {});
-});
-
-test("generateImage validates prompt and rejects data: URI refs before the provider call", async (t) => {
-  const calls = installPaiFetch(t, () => jsonResponse(inlineImageBody()));
-
   await assert.rejects(
-    generateImage({}),
-    (e) => e.klass === "bad_args" && /prompt required/.test(e.message),
-  );
-  await assert.rejects(
-    generateImage({ prompt: "   " }),
-    (e) => e.klass === "bad_args" && /prompt required/.test(e.message),
-  );
-  await assert.rejects(
-    generateImage({ prompt: "x", refImageUrls: ["data:image/png;base64,AAAA"] }),
-    (e) => e.klass === "bad_args" && /URL refs only/.test(e.message),
-  );
-  assert.equal(calls.length, 0);
-});
-
-test("generateImage classifies promptFeedback.blockReason as content_filtered", async (t) => {
-  installPaiFetch(t, () => jsonResponse({
-    promptFeedback: { blockReason: "PROHIBITED_CONTENT" },
-    candidates: [],
-  }));
-
-  await assert.rejects(
-    generateImage({ prompt: "x" }),
-    (e) => e.klass === "content_filtered"
-      && /promptFeedback\.blockReason=PROHIBITED_CONTENT/.test(e.message),
+    generateImage({ prompt: "harbor" }),
+    (e) => e.klass === "content_filtered" && /AGE_RESTRICTED/.test(e.message),
   );
 });
 
-test("generateImage classifies safety finishReasons as content_filtered (case-insensitive)", async (t) => {
-  const reasons = ["IMAGE_SAFETY", "blocklist"];
-  let i = 0;
-  installPaiFetch(t, () => jsonResponse({
-    candidates: [{ finishReason: reasons[i++], content: { parts: [] } }],
-  }));
+test("generateImage maps job PROCESSING_ERROR to infra and surfaces refunded/retryable", async (t) => {
+  installDeapiFetch(t, {
+    handler(entry) {
+      if (entry.url.includes("/api/v2/jobs/")) {
+        return jsonResponse(errorJob({ refunded: true, retryable: false }));
+      }
+      return undefined;
+    },
+  });
 
   await assert.rejects(
-    generateImage({ prompt: "x" }),
-    (e) => e.klass === "content_filtered" && /finishReason=IMAGE_SAFETY/.test(e.message),
-  );
-  await assert.rejects(
-    generateImage({ prompt: "x" }),
-    (e) => e.klass === "content_filtered" && /finishReason=blocklist/.test(e.message),
-  );
-});
-
-test("generateImage treats 200-with-no-image as content_filtered and names unfetchable refs", async (t) => {
-  installPaiFetch(t, () => jsonResponse({
-    candidates: [{ finishReason: "STOP", content: { parts: [{ text: "no image for you" }] } }],
-  }));
-
-  await assert.rejects(
-    generateImage({ prompt: "x" }),
-    (e) => e.klass === "content_filtered"
-      && /no inline image/.test(e.message)
-      && !/with refs/.test(e.message),
-  );
-  await assert.rejects(
-    generateImage({ prompt: "x", refImageUrls: ["https://example.com/ref.png"] }),
-    (e) => e.klass === "content_filtered"
-      && /no inline image/.test(e.message)
-      && e.message.includes("https://example.com/ref.png")
-      && /publicly fetchable/.test(e.message),
+    generateImage({ prompt: "harbor" }),
+    (e) => e.klass === "infra" && /refunded=true/.test(e.message) && /retryable=false/.test(e.message),
   );
 });
 
-test("generateImage surfaces inline data that decodes to zero bytes as transient", async (t) => {
-  installPaiFetch(t, () => jsonResponse(inlineImageBody({ data: "!!!" })));
+test("generateImage maps HTTP 422 on submit to bad_args with field detail", async (t) => {
+  installDeapiFetch(t, {
+    handler(entry) {
+      if (entry.url.endsWith("/api/v2/images/generations") && entry.method === "POST") {
+        return jsonResponse({
+          message: "The steps field must not be greater than 10.",
+          errors: { steps: ["The steps field must not be greater than 10.", "The steps field must not be greater than 10."] },
+        }, 422);
+      }
+      return undefined;
+    },
+  });
 
   await assert.rejects(
-    generateImage({ prompt: "x" }),
-    (e) => e.klass === "transient" && /image bytes are empty/.test(e.message),
-  );
-});
-
-test("generateImage maps HTTP 400 to bad_args", async (t) => {
-  installPaiFetch(t, () => jsonResponse({ detail: "payload rejected upstream" }, 400));
-
-  await assert.rejects(
-    generateImage({ prompt: "x" }),
-    (e) => e.klass === "bad_args" && /payload rejected upstream/.test(e.message),
+    generateImage({ prompt: "harbor" }),
+    // Duplicate field messages are de-duplicated before joining.
+    (e) => e.klass === "bad_args"
+      && /steps:/.test(e.message)
+      && e.message.split("must not be greater than 10").length === 3, // once in message, once in detail
   );
 });
 
 test("generateImage maps HTTP 429 to rate_limited and parses Retry-After", async (t) => {
-  installPaiFetch(t, () => jsonResponse({ detail: "slow down" }, 429, { "Retry-After": "7" }));
+  installDeapiFetch(t, {
+    handler(entry) {
+      if (entry.url.endsWith("/api/v2/images/generations") && entry.method === "POST") {
+        return jsonResponse({ message: "Too Many Attempts." }, 429, { "Retry-After": "17" });
+      }
+      return undefined;
+    },
+  });
 
   await assert.rejects(
-    generateImage({ prompt: "x" }),
-    (e) => e.klass === "rate_limited" && e.retryAfterSec === 7 && /slow down/.test(e.message),
+    generateImage({ prompt: "harbor" }),
+    (e) => e.klass === "rate_limited" && e.retryAfterSec === 17,
   );
 });
 
-test("generateImage picks the first inline image across candidates and mixed parts", async (t) => {
-  const SECOND = Buffer.from("second-image");
-  installPaiFetch(t, () => jsonResponse({
-    candidates: [
-      { finishReason: "STOP", content: { parts: [{ text: "thinking…" }] } },
-      { content: {} },
-      {
-        content: {
-          parts: [
-            { text: "here you go" },
-            { inlineData: { data: PNG_B64 } }, // no mimeType → image/png default
-            { inlineData: { mimeType: "image/png", data: SECOND.toString("base64") } },
-          ],
-        },
-      },
-    ],
-  }));
+test("generateImage proceeds with costUsd null when the price quote fails", async (t) => {
+  installDeapiFetch(t, {
+    handler(entry) {
+      if (/\/price$/.test(entry.url)) {
+        return jsonResponse({ message: "Server Error" }, 500);
+      }
+      return undefined;
+    },
+  });
 
-  const result = await generateImage({ prompt: "x" });
+  const result = await generateImage({ prompt: "harbor" });
   assert.deepEqual(result.bytes, PNG_BYTES);
-  assert.equal(result.mime, "image/png");
+  assert.equal(result.costUsd, null);
+});
+
+test("generateImage throws infra when the job finishes with no result_url", async (t) => {
+  installDeapiFetch(t, {
+    handler(entry) {
+      if (entry.url.includes("/api/v2/jobs/")) {
+        return jsonResponse({ data: { status: "done", result_url: null, progress: 100 } });
+      }
+      return undefined;
+    },
+  });
+
+  await assert.rejects(
+    generateImage({ prompt: "harbor" }),
+    (e) => e.klass === "infra" && /no result_url/.test(e.message),
+  );
+});
+
+test("generateImage rejects an unknown model slug with the account catalog listed", async (t) => {
+  installDeapiFetch(t, { env: { DEAPI_IMAGE_MODEL: "NotARealModel" } });
+  // model_registry reads env at module init, so override via a fresh import.
+  const registry = await import(`../model_registry.js?bust=${Date.now()}`);
+  assert.ok(registry); // registry env plumbing is covered in model_registry.test.js
+  // Direct catalog check through the client path:
+  const { getModelEntry } = await import("../deapi_client.js");
+  await assert.rejects(
+    getModelEntry("NotARealModel"),
+    (e) => e.klass === "bad_args" && /not in this account's catalog/.test(e.message) && /Flux1schnell/.test(e.message),
+  );
 });

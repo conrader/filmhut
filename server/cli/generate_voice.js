@@ -201,7 +201,7 @@ try {
       prompt: args.prompt,
       ...(sourceNodeId ? { source_id: sourceNodeId } : {}),
       metadata: {
-        source: "pai",
+        source: "deapi",
         task_type: "tts",
         model: modelName,
         ...(durationSec !== null ? { duration_sec: durationSec } : {}),

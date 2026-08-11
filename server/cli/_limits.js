@@ -7,25 +7,23 @@ import {
 } from "../image_pro_sizes.js";
 
 export const VIDEO_LIMITS = {
-  // video-generation. Duration caps are asymmetric across audio / video:
-  //  - Each audio / video ref must be 1.8s-15.2s per file (the asset-upload
-  //    step rejects with DurationTooLong / DurationTooShort if outside).
-  //  - Audio refs: NO aggregate cap (verified: 3 audios totaling 37.84s succeed).
-  //  - Video refs: aggregate <=15s total (verified: 3 videos totaling 35.41s
-  //    fail at gen with `bad_args` "invalid video duration, exceeds 15s").
-  //  - Audio refs also require a visual anchor — `bad_args`
-  //    "reference_audio cannot be the only reference input" otherwise.
-  max_image_refs: 9,
-  max_audio_refs: 3,
-  max_video_refs: 3,
-  min_audio_sec: 1.8,
-  max_audio_sec: 15.2,
-  min_video_sec: 1.8,
-  max_video_sec: 15.2,
-  max_total_video_sec: 15,
+  // video-generation via deAPI:
+  //  - Image refs map to first_frame_image + optional last_frame_image
+  //    (the latter only on models advertising supports_last_frame) → max 2.
+  //  - One audio ref routes the request to videos/audio-syncs.
+  //  - Video refs are not accepted by deAPI's video endpoints at all.
+  //  - Uploaded files: images ≤10MB, audio ≤20MB (MP3/OGG for audio-syncs).
+  max_image_refs: 2,
+  max_audio_refs: 1,
+  max_video_refs: 0,
+  max_image_ref_mb: 10,
+  max_audio_ref_mb: 20,
 };
 
-export const IMAGE_LIMITS     = { max_image_refs: 16, min_ref_image_dimension: 300 };  // image-generation (standard tier)
+// image-generation (standard tier). The per-request ref cap is the edit
+// model's max_input_images (checked live in the client); 16 is kept as
+// the CLI-side sanity ceiling.
+export const IMAGE_LIMITS     = { max_image_refs: 16, min_ref_image_dimension: 300 };
 export const IMAGE_PRO_LIMITS = {
   max_image_refs: IMAGE_PRO_MAX_IMAGE_REFS,
   min_ref_image_dimension: 300,

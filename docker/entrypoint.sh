@@ -6,7 +6,7 @@
 #   2. Ensure the projects dir and Codex state dir exist.
 #   3. Verify the selected agent CLI is available.
 #   4. Verify PUBLIC_VIEWER_URL or a quick tunnel before showing the web UI.
-#   5. Warn if PAI_KEY is absent.
+#   5. Warn if DEAPI_KEY is absent.
 #   6. Hand off to node with exec so tini sees node directly.
 set -e
 
@@ -216,23 +216,23 @@ fi
 verify_tunnel_reachable
 stop_probe_server
 
-# 5. PAI_KEY warn-but-don't-block. Docker startup has no TTY for an
+# 5. DEAPI_KEY warn-but-don't-block. Docker startup has no TTY for an
 #    interactive prompt; the next-best onboarding hint is a loud message
 #    before the viewer boots so the user knows why generation later
 #    fails. Canvas, terminal, project switching all work without a key —
 #    only media CLIs need it. We don't exit here.
-if [ -z "${PAI_KEY:-}" ]; then
+if [ -z "${DEAPI_KEY:-}" ]; then
     echo ""
     echo "════════════════════════════════════════════════════════════════"
-    echo "  PAI_KEY is not set."
+    echo "  DEAPI_KEY is not set."
     echo ""
     echo "  Media generation will fail until you set it. Add one to your"
     echo "  .env (next to docker-compose.yml) and restart:"
     echo ""
-    echo "    echo \"PAI_KEY=PAI_yourkey\" >> .env"
+    echo "    echo \"DEAPI_KEY=yourkey\" >> .env"
     echo "    ./scripts/docker-start.sh"
     echo ""
-    echo "  Get a key: https://pai-pro.utopaistudios.com/keys"
+    echo "  Get a key: https://app.deapi.ai/dashboard/api-keys"
     echo "════════════════════════════════════════════════════════════════"
     echo ""
 fi

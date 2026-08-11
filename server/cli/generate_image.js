@@ -1,17 +1,12 @@
 #!/usr/bin/env node
-// CLI wrapper for the standard image tier via PAI raw passthrough
-// (model id: image-generation).
+// CLI wrapper for the standard image tier via deAPI
+// (capability id: image-generation).
 //
 // Refs: pass --ref-source-id NODE_ID to chain off a prior canvas node.
-// The CLI resolves to that node's mirrored local file and rewrites the
-// viewer URL's host to the cloudflared tunnel origin (via .tunnel_url),
-// so PAI's `image-generation` can fetch the bytes server-side. For
-// external URLs, the agent runs mirror_url.js first to mint a canvas
+// The CLI resolves to that node's mirrored local file and uploads the
+// bytes to deAPI directly as multipart form data — no tunnel involved.
+// For external URLs, the agent runs mirror_url.js first to mint a canvas
 // reference node, then references that node's id via --ref-source-id.
-//
-// `./scripts/start.sh` auto-launches `cloudflared tunnel` and writes the
-// public URL to .tunnel_url. If .tunnel_url is missing the call fails with
-// bad_args pointing back at `./scripts/start.sh`.
 //
 // Output (stdout, one line):
 //   { ok: true, output_url, model, aspect_ratio, image_size,
@@ -218,19 +213,18 @@ let emitted = null;
 try {
   const projectId = args["project-id"] || (await readActiveProject());
 
-  // Image gen passes tunnel URLs directly to the upstream model via
-  // fileData.fileUri (no asset upload involved), so we only need the
-  // tunnelUrl side of buildProviderRefs's enriched return shape.
+  // deAPI takes ref bytes as direct multipart uploads, so refs resolve
+  // to absolute local file paths — no tunnel involved.
   const resolvedRefs = (await buildProviderRefs({
     sourceIds: refSources,
     projectId,
-  })).map((r) => r.tunnelUrl);
+  })).map((r) => r.absPath);
 
   const result = await paiGenerateImage({
     prompt: args.prompt,
     aspectRatio: args["aspect-ratio"],
     imageSize: args["image-size"],
-    refImageUrls: resolvedRefs,
+    refImagePaths: resolvedRefs,
   });
   // Mutator fills image_url + local_path after renaming the staged file
   // into assets/images/<node-id><ext> — the data payload below omits both.
@@ -246,7 +240,7 @@ try {
     label: args.label || truncateLabel(args.prompt),
     prompt: args.prompt,
     metadata: {
-      source: "pai",
+      source: "deapi",
       task_type: "image_generation",
       model: result.model,
       aspect_ratio: args["aspect-ratio"],

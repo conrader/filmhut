@@ -48,6 +48,8 @@ Open Docker at <http://localhost:7588> or local at <http://localhost:7443>.
 
 ## API Service
 
+> **This fork routes all media generation through [deAPI](https://deapi.ai) via `DEAPI_KEY`, not the PAI hosted service described below.** The pricing table below reflects the original upstream PAI service, not this fork.
+
 `PAI_KEY` gives each production one service for image, image pro, video, voice, and 4K upscaling, without separate provider keys for each step. Use the <a href="https://pai-pro.utopaistudios.com/keys" target="_blank" rel="noopener noreferrer">PAI Pro Developer Platform</a> to manage keys, tasks, balance, and credits. It also supports less restrictive video moderation via asset preupload and helps support this project. Paid generations are staged first; for BYOK and exact payloads, see [API Service](docs/api_service.md).
 
 | Capability | Quality | Time | # of references | Estimated price |
