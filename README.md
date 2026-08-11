@@ -24,6 +24,25 @@
 
 </div>
 
+---
+
+## About this copy (filmhut)
+
+`conrader/filmhut` is a **private derivative** of [`Utopai-Research/pai-pro`](https://github.com/Utopai-Research/pai-pro). The one substantive change: every media capability — image, image pro, video, voice, 4K upscale — runs on [deAPI](https://deapi.ai) via `DEAPI_KEY` instead of the PAI hosted service. The canvas, timeline, agent terminal, skills, and asset flow are upstream's.
+
+Because references upload directly to deAPI as multipart data, no Cloudflare tunnel is needed for generation. Run `node scripts/deapi-doctor.mjs` (free) to check your key, balance, and that each configured model exists in your account — deAPI's catalog is account-scoped.
+
+Pulling upstream changes (the `upstream` remote is fetch-only; pushing to it is disabled):
+
+```bash
+git fetch upstream
+git merge upstream/main      # expect conflicts in server/pai_*_client.js and model_registry.js
+```
+
+**Licensing:** upstream ships under the PAI PRO Sustainable Use License (see [LICENSE.md](LICENSE.md)), which is *not* open source. It permits internal business, research, and personal use, and forbids commercial use or commercial derivative works — the Skills in particular. That is why this copy is private. Keep it that way, and leave the Utopai Studios notices intact; the license forbids removing them.
+
+---
+
 ## What's PAI-Pro?
 
 PAI-Pro is a local-first AI filmmaking workspace built around four things:
