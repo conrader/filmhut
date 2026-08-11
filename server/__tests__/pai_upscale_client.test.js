@@ -63,6 +63,17 @@ test("quoteUpscale rejects a source over the model's duration cap or the 50MB si
   assert.equal(calls.filter((c) => c.method === "POST").length, 0, "no paid calls on validation failures");
 });
 
+test("quoteUpscale rejects a source over the model's max_width before any POST", async (t) => {
+  const calls = installDeapiFetch(t);
+
+  // FlashVSR_Tiny's input box caps at 1920x1920.
+  await assert.rejects(
+    quoteUpscale({ sourceSpec: { width: 3840, height: 2160, duration: 5, size: 1_000_000 } }),
+    (e) => e.klass === "bad_args" && /3840x2160/.test(e.message) && /1920x1920/.test(e.message),
+  );
+  assert.equal(calls.filter((c) => c.method === "POST").length, 0, "no paid calls on validation failures");
+});
+
 test("quoteUpscale omits scale for a fixed-factor model (min/max_scale null)", async (t) => {
   const catalog = DEFAULT_CATALOG.map((m) => (m.slug !== "FlashVSR_Tiny" ? m : {
     ...m,

@@ -17,7 +17,14 @@
 // env var to change.
 
 import { MODELS, getDefault } from "../server/model_registry.js";
-import { listModels, getJson, quotePrice, deapiBaseUrl } from "../server/deapi_client.js";
+import {
+  listModels,
+  getJson,
+  quotePrice,
+  deapiBaseUrl,
+  deriveDimensions,
+  deriveSteps,
+} from "../server/deapi_client.js";
 
 const GREEN = "\x1b[32m", RED = "\x1b[31m", YELLOW = "\x1b[33m", DIM = "\x1b[2m", RESET = "\x1b[0m";
 const ok = (m) => console.log(`${GREEN}✓${RESET} ${m}`);
@@ -127,6 +134,11 @@ for (const req of REQUIREMENTS) {
 }
 
 // ── 4. Representative price quotes ──────────────────────────────────
+//
+// Quote bodies mirror what the clients actually send: dimensions derived
+// from each model's own limits (hardcoding 2K here just produces 422s on
+// accounts whose models cap lower), and prompt + seed included, because
+// /price validates those too despite the docs implying otherwise.
 console.log("\nlive price quotes (what a typical call actually costs):");
 const imageSlug = getDefault("image").deapi_slug;
 const editSlug = getDefault("image").deapi_edit_slug;
@@ -134,12 +146,54 @@ const videoSlug = getDefault("video").deapi_slug;
 const ttsSlug = getDefault("voice").deapi_slug;
 const upscaleSlug = getDefault("upscale").deapi_slug;
 
+const PROMPT = "a foggy harbor at dawn";
+const fit = (slug, aspectRatio, longSide) => {
+  const entry = bySlug.get(slug);
+  return entry ? deriveDimensions(entry, { aspectRatio, longSide }) : { width: 1024, height: 576 };
+};
+const steps = (slug, want) => {
+  const entry = bySlug.get(slug);
+  return entry ? deriveSteps(entry, want) : want;
+};
+const upscaleBox = (() => {
+  const lim = bySlug.get(upscaleSlug)?.info?.limits ?? {};
+  // Largest 16:9 source the upscaler will actually accept. `scale` is
+  // REQUIRED (not optional) on models exposing a min/max range, and
+  // rejected on fixed-factor models where both are null.
+  const maxW = Number(lim.max_width) || 1024;
+  const scale = lim.min_scale == null || lim.max_scale == null ? null : Number(lim.min_scale);
+  return { width: maxW, height: Math.round((maxW * 9) / 16), ...(scale != null ? { scale } : {}) };
+})();
+
+const imgDims = fit(imageSlug, "16:9", 2048);
+const editDims = fit(editSlug, "1:1", 1024);
+const vidDims = fit(videoSlug, "16:9", 1280);
+
 const QUOTES = [
-  { label: "image 2K (2048x1152, 4 steps)", path: "images/generations", body: { model: imageSlug, width: 2048, height: 1152, steps: 4 } },
-  { label: "image edit (1 ref, 20 steps)",  path: "images/edits",       body: { model: editSlug, width: 1024, height: 1024, steps: 20 } },
-  { label: "video 720p 5s (1312x736@24)",   path: "videos/generations", body: { model: videoSlug, width: 1312, height: 736, steps: 8, frames: 120, fps: 24 } },
-  { label: "voice 500 chars",               path: "audio/speech",       body: { model: ttsSlug, count_text: 500, speed: 1, lang: "en-us", format: "mp3", sample_rate: 24000 } },
-  { label: "upscale 1280x720 5s",           path: "videos/upscales",    body: { model: upscaleSlug, width: 1280, height: 720, duration: 5 } },
+  { label: `image ${imgDims.width}x${imgDims.height}`, path: "images/generations",
+    body: { prompt: PROMPT, model: imageSlug, ...imgDims, steps: steps(imageSlug, 4), seed: -1 } },
+  { label: `image edit ${editDims.width}x${editDims.height}`, path: "images/edits",
+    body: { prompt: PROMPT, model: editSlug, ...editDims, steps: steps(editSlug, 20), seed: -1 } },
+  { label: `video ${vidDims.width}x${vidDims.height} 5s@24`, path: "videos/generations",
+    body: { prompt: PROMPT, model: videoSlug, ...vidDims, steps: steps(videoSlug, 8), frames: 120, fps: 24, guidance: 3, seed: -1 } },
+  { label: "voice 500 chars", path: "audio/speech",
+    body: (() => {
+      const e = bySlug.get(ttsSlug);
+      const f = e?.info?.features ?? {};
+      const lang = e?.languages?.[0]?.slug || "en-us";
+      const design = f.supports_voice_design === true;
+      return {
+        model: ttsSlug, count_text: 500, speed: 1, lang,
+        format: e?.info?.limits?.output_formats?.[0] || "mp3",
+        sample_rate: e?.info?.limits?.available_ratios?.[0] || 24000,
+        // `mode` is validated by /price: a design-only model rejects the
+        // default custom_voice mode.
+        mode: design ? "voice_design" : "custom_voice",
+        ...(design ? {} : { voice: e?.languages?.[0]?.voices?.[0]?.slug }),
+      };
+    })() },
+  { label: `upscale ${upscaleBox.width}x${upscaleBox.height} 5s`, path: "videos/upscales",
+    body: { model: upscaleSlug, ...upscaleBox, duration: 5 } },
 ];
 
 for (const q of QUOTES) {

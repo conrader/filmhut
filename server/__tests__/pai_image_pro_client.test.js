@@ -69,11 +69,15 @@ test("generateImagePro with one ref routes to images/edits at the edit slug", as
   const submit = calls.find((c) => c.url === "https://deapi.test/api/v2/images/edits" && c.method === "POST");
   assert.ok(submit, "expected a POST to images/edits");
   assert.ok(submit.form, "edit submit must be multipart form data");
-  assert.equal(submit.form.model, "QwenImageEdit_Plus_NF4");
+  assert.equal(submit.form.model, "Flux_2_Klein_4B_BF16");
   assert.equal(submit.form.image.filename, "ref.png");
-  // Pro tier runs edits at the edit model's own default steps (40), not
-  // a cost-reduced override.
-  assert.equal(submit.form.steps, "40");
+  // Pro tier runs edits at the edit model's own default steps (4 for
+  // Flux_2_Klein_4B_BF16, whose min/max steps are both pinned at 4).
+  assert.equal(submit.form.steps, "4");
+  // Flux_2_Klein_4B_BF16 declares supports_custom_output_size: true, so
+  // dims ARE sent (default 1024x1024 size already fits the model's box).
+  assert.equal(submit.form.width, "1024");
+  assert.equal(submit.form.height, "1024");
 });
 
 test("generateImagePro with two refs sends images[] array", async (t) => {

@@ -21,7 +21,7 @@ function cloneCatalogWith(slug, patch) {
   });
 }
 
-test("generateVoice with the default Kokoro model uses custom_voice mode", async (t) => {
+test("generateVoice with the default Qwen3 TTS VoiceDesign model uses voice_design mode", async (t) => {
   const calls = installDeapiFetch(t, {
     handler(entry) {
       if (entry.url.startsWith("https://results.deapi.test")) return bytesResponse(Buffer.from("id3"), "audio/mpeg");
@@ -40,33 +40,39 @@ test("generateVoice with the default Kokoro model uses custom_voice mode", async
   assert.ok(submit, "expected a POST to audio/speech");
   assert.ok(submit.form, "tts submit must be multipart form data");
   assert.equal(submit.form.text, "hello there");
-  assert.equal(submit.form.model, "Kokoro");
-  assert.equal(submit.form.lang, "en-us");
+  assert.equal(submit.form.model, "Qwen3_TTS_12Hz_1_7B_VoiceDesign");
+  assert.equal(submit.form.lang, "English");
   assert.equal(submit.form.speed, "1");
   assert.equal(submit.form.format, "mp3");
   assert.equal(submit.form.sample_rate, "24000");
+  assert.equal(submit.form.mode, "voice_design");
+  assert.equal(submit.form.instruct, "warm, calm narrator");
+  assert.equal(submit.form.voice, undefined);
+});
+
+test("generateVoice uses custom_voice mode when the model lacks supports_voice_design", async (t) => {
+  // Override the default (Qwen3_TTS_12Hz_1_7B_VoiceDesign) catalog entry
+  // to advertise a voice preset instead of voice design — env can't steer
+  // this (model_registry reads DEAPI_TTS_MODEL at import time, already
+  // resolved to the default slug).
+  const catalog = cloneCatalogWith("Qwen3_TTS_12Hz_1_7B_VoiceDesign", {
+    info: { features: { supports_voice_design: false } },
+    languages: [
+      { name: "English", slug: "English", voices: [{ name: "Sky", slug: "af_sky", gender: "female" }] },
+    ],
+  });
+  const calls = installDeapiFetch(t, { catalog });
+
+  await generateVoice({ text: "hello there", prompt: "warm, calm narrator" });
+
+  const submit = calls.find((c) => c.url === "https://deapi.test/api/v2/audio/speech");
   assert.equal(submit.form.mode, "custom_voice");
   assert.equal(submit.form.voice, "af_sky");
   assert.equal(submit.form.instruct, "warm, calm narrator");
 });
 
-test("generateVoice uses voice_design mode when the model advertises supports_voice_design", async (t) => {
-  // Override the Kokoro catalog entry to advertise voice_design instead
-  // of preset voices — env can't steer this (model_registry reads
-  // DEAPI_TTS_MODEL at import time, already resolved to Kokoro).
-  const catalog = cloneCatalogWith("Kokoro", { info: { features: { supports_voice_design: true } } });
-  const calls = installDeapiFetch(t, { catalog });
-
-  await generateVoice({ text: "hello there", prompt: "gravelly villain voice" });
-
-  const submit = calls.find((c) => c.url === "https://deapi.test/api/v2/audio/speech");
-  assert.equal(submit.form.mode, "voice_design");
-  assert.equal(submit.form.instruct, "gravelly villain voice");
-  assert.equal(submit.form.voice, undefined);
-});
-
 test("generateVoice rejects text shorter than the model's min_text before any provider call", async (t) => {
-  const catalog = cloneCatalogWith("Kokoro", { info: { limits: { min_text: 10 } } });
+  const catalog = cloneCatalogWith("Qwen3_TTS_12Hz_1_7B_VoiceDesign", { info: { limits: { min_text: 10 } } });
   const calls = installDeapiFetch(t, { catalog });
 
   await assert.rejects(

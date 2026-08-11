@@ -29,7 +29,7 @@ Calls go via `--stage` — see the project `PROJECT_AGENT.md` § "Draft gate".
 
 `--label` defaults to truncated prompt. Use `--ref-source-id` for image refs (they map to the clip's first frame and, with a second, its last frame), `--ref-audio-source-id` for the one allowed audio ref, and `--source-node-id` for the authoring note. Mirror external URLs first. Do not set `--shot-id` during speculative/partial generation unless user asks for a reel position; story sequences assign Timeline order after planned clips land.
 
-Match stated single-clip duration with `--duration`; omit for 15s default. Split or chain >15s totals.
+Match stated single-clip duration with `--duration`; omit for the 10s default — the ceiling on the default model (241 frames @ 24fps). Chain clips for longer sequences.
 
 Each clip costs real money even after staging — only stage after the user has explicitly asked for a video.
 
@@ -72,7 +72,7 @@ Pick the one that fits. Source lookup follows `PROJECT_AGENT.md`.
 ### 1. Standalone T2V
 
 **Triggers:** fresh clip unrelated to canvas content.
-**Call:** `node "$PAI_REPO_ROOT/server/cli/generate_video.js" --prompt "..."`; omitted flags default to 15s, 16:9, 720p, audio on. Add `--resolution 480p` or `--resolution 1080p` only if the chosen video mode requires it.
+**Call:** `node "$PAI_REPO_ROOT/server/cli/generate_video.js" --prompt "..."`; omitted flags default to 10s, 16:9, 720p, audio on. Add `--resolution 480p` or `--resolution 1080p` only if the chosen video mode requires it.
 **Edges:** none.
 **For the bracket scaffold and slot-by-slot construction when the user wants polish:** see [`references/video-single-shot.md`](references/video-single-shot.md).
 
@@ -100,8 +100,8 @@ Pick the one that fits. Source lookup follows `PROJECT_AGENT.md`.
 **Source:** any canvas `video_result` node — agent-generated *or* user-uploaded (`data.metadata.source` is `"pai"` for generated and `"user_upload"` for dropped). No video ref exists, so extract the source clip's last frame with `extract_frames.js`, land it as an `image_result` node, and use that node as the ref.
 **Call:** `node "$PAI_REPO_ROOT/server/cli/generate_video.js" --prompt "..." --ref-source-id <extracted_frame.id>`.
 **Edges:** `{ from: <extracted_frame.id>, to: video_<N>, kind: "derived" }`.
-**Boundary defaults to a HARD CUT** (clip 2 opens on a new angle — this avoids the same-shot seam morph). If the whole sequence fits ≤15s, render ONE multi-shot clip (Pattern 7) instead of chaining. Same-shot continuation is the exception (authored held beat / story-required oner / explicit user request).
-**For the hard-cut + same-shot prefixes, the ≤15s guard, the sub-intent decision tree, and sequencing across linked calls:** see [`references/video-extension.md`](references/video-extension.md).
+**Boundary defaults to a HARD CUT** (clip 2 opens on a new angle — this avoids the same-shot seam morph). If the whole sequence fits ≤10s, render ONE multi-shot clip (Pattern 7) instead of chaining. Same-shot continuation is the exception (authored held beat / story-required oner / explicit user request).
+**For the hard-cut + same-shot prefixes, the ≤10s guard, the sub-intent decision tree, and sequencing across linked calls:** see [`references/video-extension.md`](references/video-extension.md).
 
 ### 5. Edit a canvas clip
 
@@ -145,9 +145,9 @@ Cross-pattern asks route to one primary reference:
 | Multi-clip chained sequence | `video-extension.md` | extracted last-frame of the previous clip for each link |
 | Compose with camera-move from reference | `video-single-shot.md` | character images; describe the camera move in the prompt — no video ref exists to borrow it from |
 | Render one script shot from canvas | Pattern 1, 2, or 3 by shot content (no dispatch — translate the shot note body to slot rules; preserve dialogue/VO verbatim) | character / variant refs + location / variant refs + voice anchors if the shot involves them |
-| Render a continuous script span (>15s total) as a dependent sequence | `video-extension.md` (script-driven chain; **hard-cut handoffs by default** — keep a link same-shot only for an unbroken oner the viewer must read as one motion) | extracted frame per link + **character refs (mandatory under hard cut)** for identity — both count against the 2-image-ref cap |
-| Render a short script (≤15s total) as one piece | `video-multi-shot.md` (cross-skill source) | up to 2 character/location image refs; when more anchors are needed than the cap allows, compose one reference frame first (`generate_image.js`/`generate_image_pro.js` edit, or `split_image.js`) and pass that single composite instead |
-| Render a storyboard mosaic as one 15s video (every panel becomes a shot block) | `video-multi-shot.md` (storyboard cross-skill source; required for `image_result.subtype === "storyboard"`) | mosaic image + character / location image refs that authored the mosaic |
+| Render a continuous script span (>10s total) as a dependent sequence | `video-extension.md` (script-driven chain; **hard-cut handoffs by default** — keep a link same-shot only for an unbroken oner the viewer must read as one motion) | extracted frame per link + **character refs (mandatory under hard cut)** for identity — both count against the 2-image-ref cap |
+| Render a short script (≤10s total) as one piece | `video-multi-shot.md` (cross-skill source) | up to 2 character/location image refs; when more anchors are needed than the cap allows, compose one reference frame first (`generate_image.js`/`generate_image_pro.js` edit, or `split_image.js`) and pass that single composite instead |
+| Render a storyboard mosaic as one 10s video (every panel becomes a shot block) | `video-multi-shot.md` (storyboard cross-skill source; required for `image_result.subtype === "storyboard"`) | mosaic image + character / location image refs that authored the mosaic |
 
 ## Sequence dispatch guidance
 

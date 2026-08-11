@@ -106,6 +106,8 @@ function deriveVideoPlan(modelEntry, { aspectRatio, resolution, duration }) {
   };
 }
 
+// /price validates prompt + seed alongside the cost-driving numbers,
+// so callers quote with the exact body they are about to submit.
 async function quoteOrNull(pricePath, body, logTag) {
   try {
     return await quotePrice({ path: pricePath, body, logTag });
@@ -200,7 +202,7 @@ export async function submitVideo({
         `submitVideo: model ${modelEntry.slug} does not support audio-conditioned video (audio2video). `
         + "Set DEAPI_VIDEO_MODEL to a model that does, or drop the audio ref.");
     }
-    costUsd = await quoteOrNull(route, numericParams, "deapi-video");
+    costUsd = await quoteOrNull(route, { prompt, seed: -1, ...numericParams }, "deapi-video");
     const files = [{ field: "audio", filePath: audios[0] }];
     if (images[0]) files.push({ field: "first_frame_image", filePath: images[0] });
     if (images[1]) files.push({ field: "last_frame_image", filePath: images[1] });
@@ -218,7 +220,7 @@ export async function submitVideo({
         `submitVideo: model ${modelEntry.slug} does not support image-to-video (img2video). `
         + "Set DEAPI_VIDEO_MODEL to a model that does, or drop the image refs.");
     }
-    costUsd = await quoteOrNull(route, numericParams, "deapi-video");
+    costUsd = await quoteOrNull(route, { prompt, seed: -1, ...numericParams }, "deapi-video");
     const files = [{ field: "first_frame_image", filePath: images[0] }];
     if (images[1]) files.push({ field: "last_frame_image", filePath: images[1] });
     submitted = await postForm({
@@ -235,7 +237,7 @@ export async function submitVideo({
         `submitVideo: model ${modelEntry.slug} does not support text-to-video (txt2video). `
         + "Set DEAPI_VIDEO_MODEL to a model that does, or add an image ref.");
     }
-    costUsd = await quoteOrNull(route, numericParams, "deapi-video");
+    costUsd = await quoteOrNull(route, { prompt, seed: -1, ...numericParams }, "deapi-video");
     submitted = await postJson({
       path: route,
       body: { prompt, seed: -1, ...numericParams },

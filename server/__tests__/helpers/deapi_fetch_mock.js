@@ -40,10 +40,10 @@ export const DEFAULT_CATALOG = [
   },
   {
     name: "FLUX.2 Klein 4B", slug: "Flux_2_Klein_4B_BF16",
-    inference_types: ["txt2img"], tags: [], status: "standard_model",
+    inference_types: ["txt2img", "img2img"], tags: [], status: "standard_model",
     info: {
-      limits: { min_width: 256, max_width: 2048, min_height: 256, max_height: 2048, min_steps: 1, max_steps: 50, resolution_step: 16 },
-      features: { supports_steps: true },
+      limits: { min_width: 256, max_width: 1536, min_height: 256, max_height: 1536, min_steps: 4, max_steps: 4, resolution_step: 16, max_input_images: 3 },
+      features: { supports_steps: true, supports_custom_output_size: true },
       defaults: { steps: 4 },
     },
   },
@@ -79,14 +79,14 @@ export const DEFAULT_CATALOG = [
     ],
   },
   {
-    name: "Qwen3 TTS VoiceDesign", slug: "Qwen3_TTS_VoiceDesign",
+    name: "Qwen3 TTS 12Hz 1.7B VoiceDesign", slug: "Qwen3_TTS_12Hz_1_7B_VoiceDesign",
     inference_types: ["txt2audio"], tags: [], status: "standard_model",
     info: {
       limits: { min_text: 10, max_text: 5000, min_speed: 1, max_speed: 1, available_ratios: [24000], output_formats: ["mp3"] },
-      features: { supports_voice_design: true },
+      features: { supports_voice_design: true, supports_voice_clone: false, supports_custom_voice: false },
     },
     languages: [
-      { name: "English (US)", slug: "en-us", voices: [] },
+      { name: "English", slug: "English", voices: [] },
     ],
   },
   {

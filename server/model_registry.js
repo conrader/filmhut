@@ -60,50 +60,81 @@ function envSlug(name, fallback) {
 
 // ── Cost functions ──────────────────────────────────────────────────
 //
-// deAPI prices dynamically per task (resolution × steps for images,
-// pixels × frames for video, characters for TTS). The numbers below are
-// display-only approximations anchored to live /price readings from the
-// deAPI pricing table (2026-08); the clients quote the exact price via
-// POST /api/v2/<resource>/price before every paid call.
+// Display-only estimates for the stage gate and auto-budget reservation.
+// The clients fetch the exact figure from POST /api/v2/<resource>/price
+// before every paid call, so these only need to be close and must never
+// undershoot badly.
+//
+// The formulas below were fitted against the live /price endpoint
+// (2026-08) rather than taken from the published pricing table, which
+// implies a simple per-pixel rate. deAPI actually prices these routes
+// AFFINELY — a fixed per-job base plus a marginal rate — so a
+// proportional model overcharges short/small jobs badly (a linear fit
+// put a 5s 720p clip at $0.33; it really costs $0.047).
+//
+// Nominal (pre-clamp) dimensions are used here, because a sync registry
+// can't consult the model catalog. Models whose box is smaller bill
+// less, so these read high — the safe direction for a spend gate.
 
-// Image standard tier (Flux-class, 4 steps). Anchor: 1024x1024 ≈ $0.0027.
+function pixelsForTier(longSide, aspectRatio) {
+  const m = /^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/.exec(String(aspectRatio || "16:9").trim());
+  const ratio = m ? Number(m[1]) / Number(m[2]) : 16 / 9;
+  return ratio >= 1
+    ? longSide * (longSide / ratio)
+    : longSide * (longSide * ratio);
+}
+
+// Image standard tier. Measured on Flux1schnell:
+//   $0.000922 base + px × (5.62e-10 + 2.78e-10 × steps), 4 steps default.
+// Live checks: 1024x576 $0.00191, 2048x1152 $0.00487 (both within 0.1%).
 function imageCostBySize(params = {}) {
   const size = String(params.image_size || params.imageSize || "2K").toLowerCase();
-  if (size === "1k") return 0.003;
-  if (size === "2k") return 0.011;
-  if (size === "4k") return 0.043;
-  return 0.011; // 2K default
+  const longSide = size === "1k" ? 1024 : size === "4k" ? 3840 : 2048;
+  const px = pixelsForTier(longSide, params.aspect_ratio);
+  return +(0.000922 + px * (5.62e-10 + 2.78e-10 * 4)).toFixed(4);
 }
 
-// Image pro tier. Ref-less pro runs price like the standard tier;
-// ref-based edits are steps-driven and resolution-independent
-// (QwenImageEdit_Plus_NF4 @ 40 steps ≈ $0.035). Show the edit-path
-// ceiling so stage-gate previews don't undershoot.
+// Image pro tier. Measured on Flux_2_Klein_4B_BF16 (steps pinned at 4):
+//   text-to-image  $0.001264 base + px × 2.296e-9  (1024x1024 → $0.00367)
+//   ref/edit route flat $0.006588, independent of resolution
+// Pro is the reference tier (character sheets, mosaics), so the estimate
+// takes whichever route is dearer rather than assuming the ref-less one.
+const IMAGE_EDIT_FLAT_USD = 0.0066;
+
 function imageProCostBySize(params = {}) {
-  const tier = imageProSizeTier(params.size || IMAGE_PRO_DEFAULT_SIZE);
-  const base = tier === "1K" ? 0.003 : tier === "4K" ? 0.043 : 0.011;
-  return Math.max(base, 0.035);
+  const size = String(params.size || IMAGE_PRO_DEFAULT_SIZE);
+  const [w, h] = size.split("x").map(Number);
+  const px = Number.isFinite(w) && Number.isFinite(h)
+    ? w * h
+    : pixelsForTier(1024, "1:1");
+  return +Math.max(0.001264 + px * 2.296e-9, IMAGE_EDIT_FLAT_USD).toFixed(4);
 }
 
-// Video tier (LTX-class). Anchor: 512x512 × 49 frames ≈ $0.038 →
-// ~3.0e-9 USD per pixel-frame. Assumes 24 fps.
+// Video tier. Measured on Ltx2_3_22B_Dist_INT8 at 24 fps:
+//   $0.0388 base + px × frames × 1.159e-10 (linear in frames to <1%).
+// The base dominates short clips — 1024x576 costs $0.042 at 2s and
+// $0.055 at 10s — so duration moves the price far less than a
+// per-second model implies.
 function videoCostByResAndDuration(params = {}) {
   const res = String(params.resolution || "720p").toLowerCase();
   const dur = Number(params.duration) || 5;
   const [w, h] = res === "1080p" ? [1920, 1080] : res === "480p" ? [854, 480] : [1280, 720];
   const frames = Math.round(dur * 24);
-  return +(w * h * frames * 3.0e-9).toFixed(3);
+  return +(0.0388 + w * h * frames * 1.159e-10).toFixed(4);
 }
 
-// Voice tier. deAPI TTS is priced per input character (Kokoro ≈
-// $0.77 per 1M chars; Qwen3 TTS models are in the same order of
-// magnitude). Kept block-rounded so stage previews never show $0.00.
+// Voice tier. Strictly linear per input character, no base fee, but the
+// rate differs by an order of magnitude between models — measured
+// exactly: Qwen3 TTS VoiceDesign $1.2857e-5/char ($12.86 per 1M), Kokoro
+// $7.714e-7/char ($0.77 per 1M). The design model is the default, so
+// price against it; DEAPI_TTS_MODEL=Kokoro is ~17× cheaper per character.
+const VOICE_USD_PER_CHAR = 1.2857e-5;
+
 function voiceCostByChars(params = {}) {
   const chars = typeof params.text_chars === "number"
     ? params.text_chars
     : (typeof params.text === "string" ? params.text.length : 0);
-  const usd = Math.max(chars, 1) * 0.77e-6;
-  return +Math.max(usd, 0.0001).toFixed(4);
+  return +(Math.max(chars, 1) * VOICE_USD_PER_CHAR).toFixed(6);
 }
 
 // ── Registry ────────────────────────────────────────────────────────
@@ -115,12 +146,16 @@ export const MODELS = [
     provider: "deapi",
     kind: "image",
     deapi_slug: envSlug("DEAPI_IMAGE_MODEL", "Flux1schnell"),
-    deapi_edit_slug: envSlug("DEAPI_IMAGE_EDIT_MODEL", "QwenImageEdit_Plus_NF4"),
-    label: "Image (deAPI Flux / Qwen Edit)",
+    // Flux.2 Klein serves the ref/edit route on both tiers: it takes 3
+    // input images where QwenImageEdit_Plus_NF4 takes 1, costs ~10× less,
+    // and supports a custom output size. Set DEAPI_IMAGE_EDIT_MODEL to
+    // QwenImageEdit_Plus_NF4 for precision single-ref instruction edits.
+    deapi_edit_slug: envSlug("DEAPI_IMAGE_EDIT_MODEL", "Flux_2_Klein_4B_BF16"),
+    label: "Image (deAPI Flux)",
     cost_approx_usd: imageCostBySize,
     capabilities: ["text-to-image", "image-to-image", "multi-ref"],
     default_params: { aspect_ratio: "16:9", image_size: "2K" },
-    notes: "Async image generation via deAPI. Drafts, illustrative, stylized. Refs route to images/edits. ~10-60s.",
+    notes: "Async image generation via deAPI. Drafts, illustrative, stylized. Refs route to images/edits (≤3). ~10-60s.",
   },
 
   // ───────────── image (pro tier) ─────────────
@@ -129,12 +164,12 @@ export const MODELS = [
     provider: "deapi",
     kind: "image_pro",
     deapi_slug: envSlug("DEAPI_IMAGE_PRO_MODEL", "Flux_2_Klein_4B_BF16"),
-    deapi_edit_slug: envSlug("DEAPI_IMAGE_PRO_EDIT_MODEL", "QwenImageEdit_Plus_NF4"),
-    label: "Image Pro (deAPI Flux 2 / Qwen Edit)",
+    deapi_edit_slug: envSlug("DEAPI_IMAGE_PRO_EDIT_MODEL", "Flux_2_Klein_4B_BF16"),
+    label: "Image Pro (deAPI Flux.2 Klein)",
     cost_approx_usd: imageProCostBySize,
     capabilities: ["text-to-image", "image-to-image", "multi-ref"],
     default_params: { size: IMAGE_PRO_DEFAULT_SIZE, output_format: "png" },
-    notes: "Async pro image generation/editing via deAPI. Edits run at the edit model's full default steps. ~1-4 min.",
+    notes: "Async pro image generation/editing via deAPI. Up to 3 refs — the tier for character sheets and mosaics. ~30-90s.",
   },
 
   // ───────────── video ─────────────
@@ -155,12 +190,16 @@ export const MODELS = [
     id: "tts",
     provider: "deapi",
     kind: "voice",
-    deapi_slug: envSlug("DEAPI_TTS_MODEL", "Kokoro"),
-    label: "Voice (deAPI TTS)",
+    // Qwen3 TTS VoiceDesign advertises supports_voice_design, so the
+    // CLI's --prompt voice brief drives the voice exactly as it did on
+    // the previous provider. DEAPI_TTS_MODEL=Kokoro switches to preset
+    // voices (cheaper, 3-char minimum, no design brief).
+    deapi_slug: envSlug("DEAPI_TTS_MODEL", "Qwen3_TTS_12Hz_1_7B_VoiceDesign"),
+    label: "Voice (deAPI Qwen3 TTS VoiceDesign)",
     cost_approx_usd: voiceCostByChars,
     capabilities: ["tts", "voice-design"],
     default_params: {},
-    notes: "Async TTS via deAPI. voice_design mode when the model supports it, preset voices otherwise. ~5-30s.",
+    notes: "Async TTS via deAPI. voice_design mode: --prompt is the voice brief. Min 10 chars of text. ~5-30s.",
   },
 
   // ───────────── video upscale ─────────────

@@ -117,9 +117,12 @@ export async function generateImage({ prompt, aspectRatio, imageSize, refImagePa
   let costUsd;
   if (refs.length === 0) {
     const body = { prompt, model: slug, width, height, steps, seed: -1 };
+    // The /price endpoints validate prompt + seed too, despite the docs
+    // describing them as cost-driving-params-only — quote with the exact
+    // body we're about to submit.
     costUsd = await quoteOrNull(() => quotePrice({
       path: "images/generations",
-      body: { model: slug, width, height, steps },
+      body,
       logTag: "deapi-image",
     }));
     const submitted = await postJson({
@@ -130,9 +133,14 @@ export async function generateImage({ prompt, aspectRatio, imageSize, refImagePa
     });
     requestId = requestIdOf(submitted, "images/generations");
   } else {
+    // Some edit models declare supports_custom_output_size: false and
+    // reject width/height outright — they size the output from the input
+    // image instead. Omit the fields rather than sending a 422.
+    const sizable = modelEntry?.info?.features?.supports_custom_output_size !== false;
+    const dims = sizable ? { width, height } : {};
     costUsd = await quoteOrNull(() => quotePrice({
       path: "images/edits",
-      body: { model: slug, steps, width, height },
+      body: { prompt, model: slug, steps, ...dims, seed: -1 },
       logTag: "deapi-image",
     }));
     const files = refs.length === 1
@@ -140,7 +148,7 @@ export async function generateImage({ prompt, aspectRatio, imageSize, refImagePa
       : refs.map((p) => ({ field: "images[]", filePath: p }));
     const submitted = await postForm({
       path: "images/edits",
-      fields: { prompt, model: slug, seed: -1, steps, width, height },
+      fields: { prompt, model: slug, seed: -1, steps, ...dims },
       files,
       timeoutMs: SUBMIT_TIMEOUT_MS,
       logTag: "deapi-image",

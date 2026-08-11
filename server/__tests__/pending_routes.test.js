@@ -309,7 +309,10 @@ test("PATCH cannot raise the cost of a reserved Auto draft", async () => {
       model: "video-generation",
       resolution: "480p",
       duration: 15,
-      cost_usd: 1.2,
+      // Reserved between the 15s (0.0559) and 60s (0.1072) recomputed
+      // costs for 480p, so raising duration to 60 must be rejected while
+      // lowering it back to 5s (0.0445) stays allowed.
+      cost_usd: 0.08,
       script: "generate_video.js",
       argv: ["--prompt", "a test cat", "--resolution", "480p", "--duration", "15"],
       auto_run_id: "auto_recost_test",
@@ -324,7 +327,7 @@ test("PATCH cannot raise the cost of a reserved Auto draft", async () => {
   assert.equal(up.status, 409, "cost-raising edit must be rejected");
   const after = await readSidecar(jobId);
   assert.equal(after.duration, 15, "rejected patch must not persist");
-  assert.equal(after.cost_usd, 1.2);
+  assert.equal(after.cost_usd, 0.08);
 
   const down = await fetch(`${baseUrl}/projects/${TEST_PROJECT_ID}/pending/${jobId}`, {
     method: "PATCH",
@@ -334,7 +337,7 @@ test("PATCH cannot raise the cost of a reserved Auto draft", async () => {
   assert.equal(down.status, 200, "cost-lowering edit stays allowed");
   const lowered = await readSidecar(jobId);
   assert.equal(lowered.duration, 5);
-  assert.ok(lowered.cost_usd <= 1.2);
+  assert.ok(lowered.cost_usd <= 0.08);
   await rm(sidecarPath(jobId), { force: true });
 });
 

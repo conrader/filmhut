@@ -276,7 +276,9 @@ test("generate_video.js deAPI 422 on submit exits 1 with bad_args and no retry",
     ref_source_ids: [],
     audio_source_ids: [],
     source_node_id: null,
-    duration: 15,
+    // --duration defaults to "10" (cli/generate_video.js) — the real
+    // ceiling on the default LTX-2 model (241 frames @ 24fps ≈ 10.04s).
+    duration: 10,
     aspect_ratio: "16:9",
     resolution: "720p",
     generate_audio: true,

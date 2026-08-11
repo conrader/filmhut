@@ -273,6 +273,9 @@ try {
     prompt: args.prompt,
     audio_duration_seconds: durationSec,
     wall_clock_seconds: wallClockSec,
+    // The exact figure deAPI quoted for this call, so the agent reports
+    // real spend rather than the registry's stage-gate estimate.
+    cost_usd: result.costUsd ?? null,
     generated_at: generatedAt,
     ...(canvasMutationFragment || {}),
   };

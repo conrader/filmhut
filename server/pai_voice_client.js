@@ -125,11 +125,16 @@ export async function generateVoice({ text, prompt } = {}) {
       path: "audio/speech",
       body: {
         model: fields.model,
+        // count_text stands in for the full text on the price endpoint.
         count_text: fields.text.length,
         speed: fields.speed,
         lang: fields.lang,
         format: fields.format,
         sample_rate: fields.sample_rate,
+        // `mode` is validated here too: a voice-design-only model
+        // rejects the default custom_voice mode outright.
+        mode: fields.mode,
+        ...(fields.voice ? { voice: fields.voice } : {}),
       },
       logTag: "deapi-tts",
     });

@@ -15,6 +15,7 @@ import {
   jsonResponse,
   errorJob,
   PNG_BYTES,
+  DEFAULT_CATALOG,
 } from "./helpers/deapi_fetch_mock.js";
 
 function writeTmpPng(t) {
@@ -70,9 +71,13 @@ test("generateImage routes refs to images/edits as multipart file uploads", asyn
   assert.ok(submit, "expected a POST to images/edits");
   assert.ok(submit.form, "edit submit must be multipart form data");
   assert.equal(submit.form.prompt, "match the reference style");
-  assert.equal(submit.form.model, "QwenImageEdit_Plus_NF4");
+  assert.equal(submit.form.model, "Flux_2_Klein_4B_BF16");
   assert.equal(submit.form.image.filename, "ref.png");
   assert.equal(submit.form.image.size, PNG_BYTES.length);
+  // Flux_2_Klein_4B_BF16 declares supports_custom_output_size: true, so
+  // dims ARE sent (2K long side 2048 clamped to the model's 1536 max).
+  assert.equal(submit.form.width, "1536");
+  assert.equal(submit.form.height, "864");
 });
 
 test("generateImage sends two refs as images[] and enforces the model's max_input_images", async (t) => {
@@ -85,11 +90,32 @@ test("generateImage sends two refs as images[] and enforces the model's max_inpu
   assert.ok(Array.isArray(submit.form["images[]"]));
   assert.equal(submit.form["images[]"].length, 2);
 
-  // Catalog caps QwenImageEdit_Plus_NF4 at 3 input images.
+  // Catalog caps Flux_2_Klein_4B_BF16 (the default edit slug) at 3 input images.
   await assert.rejects(
     generateImage({ prompt: "too many", refImagePaths: [refA, refB, refA, refB] }),
     (e) => e.klass === "bad_args" && /at most 3/.test(e.message),
   );
+});
+
+test("generateImage omits width/height on the edit route when the model lacks supports_custom_output_size", async (t) => {
+  const refPath = writeTmpPng(t);
+  const catalog = DEFAULT_CATALOG.map((m) => {
+    if (m.slug !== "Flux_2_Klein_4B_BF16") return m;
+    return { ...m, info: { ...m.info, features: { ...m.info.features, supports_custom_output_size: false } } };
+  });
+  const calls = installDeapiFetch(t, { catalog });
+
+  await generateImage({ prompt: "size me from the input", refImagePaths: [refPath] });
+
+  const submit = calls.find((c) => c.url === "https://deapi.test/api/v2/images/edits" && c.method === "POST");
+  assert.ok(submit, "expected a POST to images/edits");
+  assert.equal(submit.form.width, undefined);
+  assert.equal(submit.form.height, undefined);
+
+  const priced = calls.find((c) => c.url.endsWith("/api/v2/images/edits/price"));
+  assert.ok(priced, "expected a price quote before submit");
+  assert.equal(priced.body.width, undefined);
+  assert.equal(priced.body.height, undefined);
 });
 
 test("generateImage validates prompt and rejects URL/data: refs before any provider call", async (t) => {

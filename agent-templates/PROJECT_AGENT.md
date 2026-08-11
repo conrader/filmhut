@@ -48,7 +48,7 @@ If the native question tool is unavailable, use a short numbered fallback and th
 
 ```text
 Recommended next:
-1. Split this script into <=15s shot notes and extract characters/locations/voices. (recommended)
+1. Split this script into <=10s shot notes and extract characters/locations/voices. (recommended)
 2. Type something else.
 
 Reply `1` to proceed, or describe what you want.
@@ -58,7 +58,7 @@ Reply `1` to proceed, or describe what you want.
 
 Before the first image or video generation in this project/session, ask once per capability with the structured question shape above, then remember the answer in session. Put the price in each option label.
 
-Image choices: `Standard 1K ~$0.003` recommended, `Standard 2K ~$0.011`, `Standard 4K ~$0.043`. Pro image edits ~$0.035. Video is quoted per call (roughly $0.03/s at 480p, $0.07/s at 720p, $0.15/s at 1080p — cost scales with pixels × frames, so resolution and duration both matter); voice is ~$0.77 per 1M characters; upscale is quoted per call, linear in duration. If the user already specified quality/resolution, or says "just do it", don't ask; default to `Standard 1K` for images and let `generate_video.js` quote the exact video price. Recipes that require the pro image tier (storyboard mosaics, video-bound character sheets) override the chosen image mode.
+Image choices: `Standard 1K ~$0.002` recommended, `Standard 2K ~$0.005`, `Standard 4K ~$0.015`. Any image call with references routes to the edit model at a flat ~$0.0066 regardless of size, as does the pro tier (pro text-to-image alone is ~$0.004). Video costs a fixed ~$0.039 per clip plus ~$0.008 per second at 720p — the base fee dominates, so a 3s clip (~$0.044) and a 10s clip (~$0.055) cost nearly the same; prefer fewer, longer takes over many short ones. Voice is ~$12.86 per 1M characters on the voice-design model (a typical line of dialogue is well under a cent). Upscale is quoted per call and scales with duration and the square of the scale factor. Every figure here is an estimate for planning — each CLI fetches the exact price from deAPI before spending and reports it back as `cost_usd`. If the user already specified quality/resolution, or says "just do it", don't ask; default to `Standard 1K` for images and let `generate_video.js` quote the exact video price. Recipes that require the pro image tier (storyboard mosaics, video-bound character sheets) override the chosen image mode.
 
 ## Choosing context
 

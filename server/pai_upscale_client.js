@@ -66,6 +66,21 @@ function validateSourceSpec(modelEntry, sourceSpec) {
       `upscale source is ${sourceSpec.duration}s; model ${modelEntry.slug} caps at ${maxDur}s. `
       + "Split the clip (extract/segment) and upscale the parts.");
   }
+  // Input resolution is capped per model and is easy to breach — the
+  // upscale models are much smaller than the generation models (1024px
+  // on FlashVSR_Tiny), so a 720p clip has nowhere to go. Fail here with
+  // an actionable message rather than on an opaque 422 at submit.
+  const maxW = Number(limits.max_width);
+  const maxH = Number(limits.max_height);
+  const w = Number(sourceSpec.width);
+  const h = Number(sourceSpec.height);
+  if (Number.isFinite(maxW) && Number.isFinite(w) && w > maxW
+      || Number.isFinite(maxH) && Number.isFinite(h) && h > maxH) {
+    throw err("bad_args",
+      `upscale source is ${w}x${h}; model ${modelEntry.slug} accepts at most ${maxW}x${maxH} in. `
+      + "Upscaling only runs on sources below that — generate the clip at a smaller "
+      + "resolution first, or set DEAPI_UPSCALE_MODEL to a model with a larger input box.");
+  }
   if (Number(sourceSpec.size) > MAX_SOURCE_BYTES) {
     throw err("bad_args",
       `upscale source is ${(sourceSpec.size / 1024 / 1024).toFixed(1)}MB; deAPI caps uploads at 50MB.`);

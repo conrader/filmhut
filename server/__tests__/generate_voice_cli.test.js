@@ -167,22 +167,23 @@ test("generate_voice.js direct fire lands anchored audio node + mp3 asset", asyn
   assert.equal(typeof reply.wall_clock_seconds, "number");
   assert.equal(reply.local_path, "assets/audios/audio_1.mp3");
   assert.equal(reply.output_url, `/projects/${projectId}/assets/audios/audio_1.mp3`);
+  assert.equal(reply.cost_usd, 0.0042);
   assert.equal(reply.canvas_mutation.node_id, "audio_1");
   assert.equal(reply.canvas_mutation.version, 1);
 
   // Upstream wire contract: multipart submit to audio/speech. Default
-  // catalog model (Kokoro) has no voice_design support → custom_voice mode
-  // with its first advertised voice preset (af_sky); the brief still rides
-  // along as the style/emotion `instruct` field.
+  // catalog model (Qwen3_TTS_12Hz_1_7B_VoiceDesign) advertises
+  // supports_voice_design → voice_design mode, brief drives the voice
+  // directly (no preset voice field).
   assert.equal(deapi.captures.submits.length, 1);
   const submit = deapi.captures.submits[0];
   assert.equal(submit.url, "/api/v2/audio/speech");
   const sentFields = submit.form.fields;
-  assert.equal(sentFields.model, "Kokoro");
+  assert.equal(sentFields.model, "Qwen3_TTS_12Hz_1_7B_VoiceDesign");
   assert.equal(sentFields.text, text);
   assert.equal(sentFields.instruct, brief);
-  assert.equal(sentFields.mode, "custom_voice");
-  assert.equal(sentFields.voice, "af_sky");
+  assert.equal(sentFields.mode, "voice_design");
+  assert.equal(sentFields.voice, undefined);
   assert.equal(sentFields.format, "mp3");
 
   // Node + authorship edge landed in workflow.json via the real mutator.
@@ -251,7 +252,7 @@ test("generate_voice.js deAPI 422 exits 1 with bad_args and no retry", async (t)
   assert.equal(reply.ok, false);
   assert.equal(reply.klass, "bad_args");
   assert.match(reply.message, /deAPI 422: synthetic tts rejection/);
-  assert.deepEqual(reply.limits, {});
+  assert.deepEqual(reply.limits, { min_text_chars: 10, max_text_chars: 5000 });
   assert.deepEqual(reply.sent, {
     text_chars: "doomed line".length,
     prompt_chars: "doomed brief".length,

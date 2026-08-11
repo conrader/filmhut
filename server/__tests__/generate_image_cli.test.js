@@ -233,7 +233,7 @@ test("generate_image.js deAPI 500 on every submit attempt exits 1 with transient
   // 500 → transient; deapi_client's built-in retry also 500s → re-tagged.
   assert.equal(reply.klass, "transient_exhausted");
   assert.match(reply.message, /after 2 attempts/);
-  assert.equal(reply.limits.max_image_refs, 16);
+  assert.equal(reply.limits.max_image_refs, 3);
   assert.deepEqual(reply.sent, { ref_source_ids: [], aspect_ratio: "16:9", image_size: "2K" });
   assert.equal(deapi.captures.submits.length, 2);
 

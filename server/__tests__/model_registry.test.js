@@ -19,12 +19,11 @@ test("model registry exposes image-generation-pro without changing image default
   assert.ok(MODELS.some((m) => m.id === "image-generation-pro"));
 });
 
-test("model registry prices image pro by tier with the edit-path floor dominating 1K/2K", () => {
-  // 1K/2K base (0.003 / 0.011) sit below the QwenImageEdit_Plus_NF4
-  // edit-path ceiling (0.035), so the floor wins on both tiers; only 4K
-  // (0.043) prices above the floor.
-  assert.equal(getCost("image-generation-pro", { size: "1024x1024" }), 0.035);
-  assert.equal(getCost("image-generation-pro", { size: "3840x2160" }), 0.043);
+test("model registry prices image pro by tier with the flat edit floor dominating small sizes", () => {
+  // Small sizes (1024x1024) sit below the $0.0066 flat edit-path floor,
+  // so the floor wins; only large sizes (3840x2160) price above it.
+  assert.equal(getCost("image-generation-pro", { size: "1024x1024" }), 0.0066);
+  assert.equal(getCost("image-generation-pro", { size: "3840x2160" }), 0.0203);
 });
 
 test("model registry keeps the image (standard) default on deAPI Flux1schnell", () => {

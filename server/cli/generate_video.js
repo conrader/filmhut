@@ -48,7 +48,9 @@ const defaultVideoParams = defaultVideoModel.default_params ?? {};
 
 const args = parseArgs({
   prompt:                  { type: "string", short: "p" },
-  duration:                { type: "string", default: "15" },
+  // 10s is the real ceiling on the default model (241 frames @ 24fps);
+  // asking for more just clamps. See VIDEO_LIMITS.max_duration_sec.
+  duration:                { type: "string", default: "10" },
   "aspect-ratio":          { type: "string", default: "16:9" },
   resolution:              { type: "string", default: defaultVideoParams.resolution ?? "720p" },
   // Audio defaults ON (generate_audio: true). Pass --no-audio ONLY when
@@ -309,17 +311,25 @@ try {
   const generatedAt = isoNow();
   const shotIdRaw = args["shot-id"];
   const shotId = shotIdRaw === undefined ? null : Number(shotIdRaw);
+  // The clip is frames/fps long, not however many seconds were asked
+  // for: the model clamps to its own frame budget (241 frames at 24 fps
+  // ≈ 10s on the default model). The canvas node must carry the REAL
+  // length or the timeline sequences shots against a duration the file
+  // doesn't have.
+  const effectiveDuration = Number(effective?.effectiveDurationSec) || durationInt;
+  const durationClamped = Math.abs(effectiveDuration - durationInt) > 0.25;
   const data = {
     label: args.label || truncateLabel(args.prompt),
     prompt: args.prompt,
-    duration: durationInt,
+    duration: effectiveDuration,
     aspect: args["aspect-ratio"],
     shot_id: Number.isFinite(shotId) ? shotId : null,
     metadata: {
       source: "deapi",
       task_type: "video_generation",
       model: plannedModel,
-      duration: durationInt,
+      duration: effectiveDuration,
+      requested_duration: durationInt,
       aspect_ratio: args["aspect-ratio"],
       resolution: args.resolution,
       generate_audio: !args["no-audio"],
@@ -373,7 +383,12 @@ try {
     local_path: localPath,
     provider_output_url: videoUrl,
     model: plannedModel,
-    duration: durationInt,
+    duration: effectiveDuration,
+    ...(durationClamped ? {
+      requested_duration: durationInt,
+      note: `duration clamped to ${effectiveDuration}s — ${effective.model} allows at most `
+        + `${effective.frames} frames at ${effective.fps}fps. Chain clips for longer sequences.`,
+    } : {}),
     aspect_ratio: args["aspect-ratio"],
     resolution: args.resolution,
     generate_audio: !args["no-audio"],

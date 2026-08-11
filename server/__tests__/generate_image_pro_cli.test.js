@@ -132,7 +132,9 @@ test("generate_image_pro.js direct fire writes pro metadata without provider_mod
   const submit = deapi.captures.submits[0];
   assert.equal(submit.url, "/api/v2/images/generations");
   assert.equal(submit.body.model, "Flux_2_Klein_4B_BF16");
-  assert.equal(submit.body.width, 2048);
+  // Flux_2_Klein_4B_BF16's box caps at 1536; the requested 2560 width
+  // clamps down, height (1440) already fits.
+  assert.equal(submit.body.width, 1536);
   assert.equal(submit.body.height, 1440);
   assert.equal(submit.body.steps, 4);
   assert.equal(submit.body.image, undefined);

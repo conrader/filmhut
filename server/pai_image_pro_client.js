@@ -160,9 +160,10 @@ export async function generateImagePro({
   let requestId;
   let costUsd;
   if (refs.length === 0) {
+    // /price validates prompt + seed as well — quote the exact submit body.
     costUsd = await quoteOrNull(() => quotePrice({
       path: "images/generations",
-      body: { model: slug, width, height, steps },
+      body: { prompt: promptText, model: slug, width, height, steps, seed: -1 },
       logTag: "deapi-image-pro",
     }));
     const submitted = await postJson({
@@ -173,9 +174,13 @@ export async function generateImagePro({
     });
     requestId = requestIdOf(submitted, "images/generations");
   } else {
+    // Edit models that declare supports_custom_output_size: false reject
+    // width/height — they size from the input image.
+    const sizable = modelEntry?.info?.features?.supports_custom_output_size !== false;
+    const dims = sizable ? { width, height } : {};
     costUsd = await quoteOrNull(() => quotePrice({
       path: "images/edits",
-      body: { model: slug, steps, width, height },
+      body: { prompt: promptText, model: slug, steps, ...dims, seed: -1 },
       logTag: "deapi-image-pro",
     }));
     const files = refs.length === 1
@@ -183,7 +188,7 @@ export async function generateImagePro({
       : refs.map((p) => ({ field: "images[]", filePath: p }));
     const submitted = await postForm({
       path: "images/edits",
-      fields: { prompt: promptText, model: slug, seed: -1, steps, width, height },
+      fields: { prompt: promptText, model: slug, seed: -1, steps, ...dims },
       files,
       timeoutMs: SUBMIT_TIMEOUT_MS,
       logTag: "deapi-image-pro",
