@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import http from "node:http";
 
 import { PAI_REPO_ROOT } from "../lib/paths.js";
+import { makeDeapiServer } from "./helpers/deapi_cli_fake_server.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const CLI_DIR = join(__dirname, "..", "cli");
@@ -32,6 +33,14 @@ function parseReply(stdout) {
   return JSON.parse(lines[lines.length - 1]);
 }
 
+function deapiEnv(deapi) {
+  return {
+    DEAPI_KEY: "dpn-sk-test",
+    DEAPI_API_BASE: deapi.url,
+    DEAPI_POLL_INTERVAL_MS: "10",
+  };
+}
+
 async function setupProject(t) {
   const projectId = `pro_cli_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const dir = join(PAI_REPO_ROOT, "projects", projectId);
@@ -47,40 +56,6 @@ async function setupProject(t) {
   );
   t.after(() => rm(dir, { recursive: true, force: true }));
   return { projectId, dir };
-}
-
-function makePaiServer() {
-  const captures = { generateBodies: [] };
-  const server = http.createServer((req, res) => {
-    if (req.method === "GET" && req.url === "/out.png") {
-      res.setHeader("content-type", "image/png");
-      res.end(PNG_BYTES);
-      return;
-    }
-    if (req.method === "POST" && req.url === "/api/v1/generate") {
-      let raw = "";
-      req.on("data", (chunk) => { raw += chunk; });
-      req.on("end", () => {
-        captures.generateBodies.push(raw ? JSON.parse(raw) : {});
-        const { port } = server.address();
-        res.setHeader("content-type", "application/json");
-        res.end(JSON.stringify({
-          outcome: {
-            media_urls: [{ url: `http://127.0.0.1:${port}/out.png` }],
-          },
-        }));
-      });
-      return;
-    }
-    res.statusCode = 404;
-    res.end("not found");
-  });
-  return new Promise((resolve) => {
-    server.listen(0, "127.0.0.1", () => {
-      const { port } = server.address();
-      resolve({ server, url: `http://127.0.0.1:${port}`, captures });
-    });
-  });
 }
 
 function makeViewerServer({ assignedNodeId = "image_pro_cli_1" } = {}) {
@@ -120,8 +95,8 @@ function makeViewerServer({ assignedNodeId = "image_pro_cli_1" } = {}) {
 
 test("generate_image_pro.js direct fire writes pro metadata without provider_model", async (t) => {
   const { projectId, dir } = await setupProject(t);
-  const pai = await makePaiServer();
-  t.after(() => new Promise((resolve) => pai.server.close(resolve)));
+  const deapi = await makeDeapiServer({ resultExt: "png", resultBytes: PNG_BYTES, resultContentType: "image/png" });
+  t.after(() => new Promise((resolve) => deapi.server.close(resolve)));
   const viewer = await makeViewerServer();
   t.after(() => new Promise((resolve) => viewer.server.close(resolve)));
 
@@ -135,8 +110,7 @@ test("generate_image_pro.js direct fire writes pro metadata without provider_mod
     ],
     cwd: dir,
     env: {
-      PAI_KEY: "PAI_test",
-      PAI_API_BASE: pai.url,
+      ...deapiEnv(deapi),
       VIEWER_HOST: "127.0.0.1",
       VIEWER_PORT: String(viewer.port),
     },
@@ -149,13 +123,19 @@ test("generate_image_pro.js direct fire writes pro metadata without provider_mod
   assert.equal(reply.size, "2560x1440");
   assert.equal(reply.aspect_ratio, "16:9");
   assert.equal(reply.image_size, "2K");
-  assert.equal(reply.cost_usd, 0.45);
+  assert.equal(reply.cost_usd, 0.0042);
   assert.equal(reply.local_path, "assets/images/image_pro_cli_1.png");
 
-  assert.equal(pai.captures.generateBodies.length, 1);
-  assert.equal(pai.captures.generateBodies[0].model, "image-generation-pro");
-  assert.equal(pai.captures.generateBodies[0].payload.size, "2560x1440");
-  assert.equal(pai.captures.generateBodies[0].payload.image, undefined);
+  // Upstream wire contract: no refs → JSON submit to images/generations,
+  // pro model slug, size fitted+snapped into the model's limits.
+  assert.equal(deapi.captures.submits.length, 1);
+  const submit = deapi.captures.submits[0];
+  assert.equal(submit.url, "/api/v2/images/generations");
+  assert.equal(submit.body.model, "Flux_2_Klein_4B_BF16");
+  assert.equal(submit.body.width, 2048);
+  assert.equal(submit.body.height, 1440);
+  assert.equal(submit.body.steps, 4);
+  assert.equal(submit.body.image, undefined);
 
   assert.equal(viewer.captures.mutateBodies.length, 1);
   const node = viewer.captures.mutateBodies[0].payload.nodes[0];

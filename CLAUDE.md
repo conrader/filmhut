@@ -23,14 +23,16 @@ Spirit borrowed from [Karpathy's observations](https://x.com/karpathy/status/201
 
 - `server/local_viewer.js` — single Node server. Project CRUD, pty spawn for each project's owning agent (cwd = `projects/<id>/`), canvas file watcher, Socket.IO push to the browser. Routes: `/projects` (list / create), `/projects/:id` (bundle), `/projects/:id/activate`, `/projects/:id/positions`, `/projects/:id/group-frames/...`, `/projects/:id/nodes/...`. Socket events: `canvas-state`, `canvas-positions`, `title`, `pending-generations`, `pty:spawned` / `pty:output` / `pty:exit` / `pty:error`.
 - `server/cli/*.js` — synchronous CLI wrappers (image, video, voice, split, extract_frames, switch_project, reel_stitch). Each prints one `{ ok, ... }` JSON line on stdout; non-zero exit with `{ ok: false, klass, message }` on failure. Shared arg parser + emit helpers in `server/cli/_cli.js`.
-- `server/pai_*.js` — PAI media API clients imported by the CLIs:
-  - **Shared HTTP**: `pai_client.js` (auth, retry policy, classified errors, `callGenerate` / `callSubmit` / `pollStatus`).
-  - **Image**: `pai_image_client.js`.
-  - **Image Pro**: `pai_image_pro_client.js`.
-  - **Video**: `pai_video_client.js` (upstream payload forwarded byte-for-byte; async submit + poll).
-  - **Voice**: `pai_voice_client.js` (PAI raw `tts`, `body_base64`-decoded).
-  - **Asset uploads**: `pai_assets_client.js` (`video-generation-assets` raw; chip-UX cache + event-emitter surface — exports `paiAssetEvents`, `snapshotAssetStates`, `seedAssetCache`, `uploadReferenceUrl`, `preuploadReferenceUrl`, `preuploadCanvasUrl`, `uploadReferences`).
-  - `local_mirror.js` handles the project-side I/O (write bytes, build viewer URLs, resolve refs to data URIs).
+- `server/deapi_client.js` + `server/pai_*.js` — media clients imported by the CLIs. The compute supplier is **deAPI v2** (`https://api.deapi.ai`, key in `DEAPI_KEY`); the `pai_*` filenames are kept so imports/diffs stay small, but their internals speak deAPI:
+  - **Shared HTTP**: `deapi_client.js` (auth, JSON/multipart POST, transient retry, classified errors, `pollJob` on `GET /api/v2/jobs/{id}`, paginated model-catalog fetch, `/price` quotes, `deriveDimensions`/`deriveSteps` from catalog limits).
+  - **Image**: `pai_image_client.js` (`images/generations`; refs → `images/edits`, local files uploaded as multipart).
+  - **Image Pro**: `pai_image_pro_client.js` (same endpoints, pro model slugs, edits run at the edit model's own default steps).
+  - **Video**: `pai_video_client.js` (route by refs: none → `videos/generations`, 1-2 images → `videos/animations` first/last frame, 1 audio → `videos/audio-syncs`; video refs rejected).
+  - **Voice**: `pai_voice_client.js` (`audio/speech`; `voice_design` mode when the model supports it, else preset voice + `instruct` style hint).
+  - **Upscale**: `pai_upscale_client.js` (`videos/upscales/price` quote → multipart submit → poll).
+  - **Asset uploads (legacy)**: `pai_assets_client.js` — the old PAI preupload chip-UX; no-ops without `PAI_KEY` and deAPI needs no preupload (refs upload inline). Kept for the socket/chip surface only.
+  - `local_mirror.js` handles the project-side I/O (write bytes, build viewer URLs, resolve refs to absolute local paths via `buildProviderRefs`).
+  - Model slugs are env-overridable per capability (`DEAPI_IMAGE_MODEL`, `DEAPI_VIDEO_MODEL`, ... — see `.env.example`); `model_registry.js` keeps provider-neutral capability ids (`image-generation`, `tts`, ...) for canvas metadata.
 - `web/src/` — React + Vite + React Flow + Socket.IO client.
 - `skills/*` — local skills. `./scripts/setup` symlinks them into `~/.claude/skills/` for Claude Code; Codex-owned projects get project-local symlinks under `.agents/skills/`. Skill-authoring rules live at `skills/CLAUDE.md` (auto-loaded when working in that subtree).
 - `agent-templates/PROJECT_AGENT.md` — canonical per-project agent operating manual. `server/services/projects.js` copies it into `projects/<id>/PROJECT_AGENT.md` at project create time, alongside the provider-specific wrapper files.

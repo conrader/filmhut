@@ -22,7 +22,7 @@ When script shot notes exist, populate the timeline from verbatim bodies. Locate
 
 When a storyboard mosaic exists (`subtype:"storyboard"` or legacy evidence), render the whole mosaic as **one 15s video**. Every panel becomes one SHOT block; pass the mosaic as a ref; do not crop or split it.
 
-- Pass the mosaic via `--ref-source-id <mosaic.id>` alongside original character/location refs.
+- Pass the mosaic via `--ref-source-id <mosaic.id>`. The 2-image-ref cap leaves room for at most one more anchor — if the mosaic already composited the needed characters/locations, that's usually enough; otherwise pick the single most important extra anchor, or compose one reference frame (edit) that combines the rest.
 - **Do not use opening-frame language.** A storyboard ref is a sequence source. Never start with `Opening frame @Image1`.
 - Open with: *"Multi-shot sequence built from the storyboard panels in @Image1. Follow panel-number order left-to-right, row-by-row."*
 - **Do not render the mosaic UI.** The panel borders, corner number badges, and grid layout are reading aids only. The output is a normal video sequence.
@@ -60,9 +60,9 @@ speed ramp ×2 (shots 1, 4) — energy punch-ins; whip pan ×1 (shot 3) — venu
 
 ## Adjacent roles
 
-- **Character image refs:** identity locks across all shots in the timeline.
+- **Character image refs:** identity locks across all shots in the timeline, capped at 2 image refs per render. When the timeline needs more anchors than the cap allows, compose one reference frame first (`generate_image.js`/`generate_image_pro.js` edit) that combines the needed characters/locations, then pass that single composite.
 - **Spoken audio:** assign to shots and speakers. Voice sample: *`Use @Audio1 as the voice/timbre reference only; speak the quoted line exactly once, no echo, no repeated reads.`* Final read: *`Use @Audio1 for timing, cadence, and voice. Keep the words unchanged.`*
-- **Camera-move source:** rare — borrow camera grammar into one specific shot.
+- **Camera-move source:** no video ref exists to borrow it from — name the camera move explicitly per shot in the timeline instead.
 
 ## Examples
 ```

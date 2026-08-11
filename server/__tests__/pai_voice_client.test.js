@@ -1,132 +1,101 @@
-// Unit tests for pai_voice_client. Mocks globalThis.fetch — PAI wraps the
-// raw MP3 as body_base64 inside a JSON envelope, so the whole round trip is
-// a single POST /api/v1/generate.
+// Unit tests for pai_voice_client (deAPI-backed). generateVoice submits
+// multipart to POST /api/v2/audio/speech, polls to terminal, and
+// downloads the presigned MP3. Mode (custom_voice vs voice_design)
+// adapts to the configured model's catalog entry.
 
 import test from "node:test";
 import assert from "node:assert/strict";
 
 import { generateVoice } from "../pai_voice_client.js";
+import {
+  installDeapiFetch,
+  jsonResponse,
+  bytesResponse,
+  DEFAULT_CATALOG,
+} from "./helpers/deapi_fetch_mock.js";
 
-const MP3_BYTES = Buffer.from("ID3-tagged-fake-mp3-bytes");
-const MP3_B64 = MP3_BYTES.toString("base64");
-
-function jsonResponse(body, status = 200) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json" },
+function cloneCatalogWith(slug, patch) {
+  return DEFAULT_CATALOG.map((m) => {
+    if (m.slug !== slug) return m;
+    return { ...m, info: { ...m.info, ...patch.info, limits: { ...m.info.limits, ...patch.info?.limits }, features: { ...m.info.features, ...patch.info?.features } }, ...(patch.languages ? { languages: patch.languages } : {}) };
   });
 }
 
-function installPaiFetch(t, handler) {
-  const priorFetch = globalThis.fetch;
-  const priorKey = process.env.PAI_KEY;
-  const priorBase = process.env.PAI_API_BASE;
-  const calls = [];
-
-  globalThis.fetch = async (url, opts = {}) => {
-    let body = null;
-    try { body = JSON.parse(opts.body || "null"); } catch {}
-    const entry = { url: String(url), method: opts.method, body };
-    calls.push(entry);
-    return handler(entry);
-  };
-  process.env.PAI_KEY = "PAI_test";
-  process.env.PAI_API_BASE = "https://pai.test";
-
-  t.after(() => {
-    globalThis.fetch = priorFetch;
-    if (priorKey === undefined) delete process.env.PAI_KEY;
-    else process.env.PAI_KEY = priorKey;
-    if (priorBase === undefined) delete process.env.PAI_API_BASE;
-    else process.env.PAI_API_BASE = priorBase;
-  });
-
-  return calls;
-}
-
-test("generateVoice sends the raw tts payload and decodes body_base64", async (t) => {
-  const calls = installPaiFetch(t, () => jsonResponse({ body_base64: MP3_B64 }));
-
-  const result = await generateVoice({
-    text: "Hello there.",
-    prompt: "Warm, low, unhurried narrator",
-  });
-
-  assert.deepEqual(result.bytes, MP3_BYTES);
-  assert.equal(result.mime, "audio/mpeg"); // no content_type in the envelope → default
-  assert.equal(result.model, "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign");
-  assert.equal(typeof result.durationSeconds, "number");
-  assert.ok(result.durationSeconds >= 0);
-  assert.equal(result.wallClockSec, result.durationSeconds);
-  assert.equal(result.costUsd, null);
-  assert.equal(result.audioDurationSec, null);
-  assert.equal(result.predictionId, null);
-
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].url, "https://pai.test/api/v1/generate");
-  assert.equal(calls[0].method, "POST");
-  assert.deepEqual(calls[0].body, {
-    model: "tts",
-    payload: {
-      model: "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
-      input: "Hello there.",
-      task_type: "VoiceDesign",
-      instructions: "Warm, low, unhurried narrator",
-      response_format: "mp3",
+test("generateVoice with the default Kokoro model uses custom_voice mode", async (t) => {
+  const calls = installDeapiFetch(t, {
+    handler(entry) {
+      if (entry.url.startsWith("https://results.deapi.test")) return bytesResponse(Buffer.from("id3"), "audio/mpeg");
+      return undefined;
     },
   });
+
+  const result = await generateVoice({ text: "hello there", prompt: "warm, calm narrator" });
+
+  assert.equal(result.mime, "audio/mpeg");
+  assert.equal(result.model, "tts");
+  assert.equal(result.predictionId, "req-1");
+  assert.equal(result.costUsd, 0.0042);
+
+  const submit = calls.find((c) => c.url === "https://deapi.test/api/v2/audio/speech" && c.method === "POST");
+  assert.ok(submit, "expected a POST to audio/speech");
+  assert.ok(submit.form, "tts submit must be multipart form data");
+  assert.equal(submit.form.text, "hello there");
+  assert.equal(submit.form.model, "Kokoro");
+  assert.equal(submit.form.lang, "en-us");
+  assert.equal(submit.form.speed, "1");
+  assert.equal(submit.form.format, "mp3");
+  assert.equal(submit.form.sample_rate, "24000");
+  assert.equal(submit.form.mode, "custom_voice");
+  assert.equal(submit.form.voice, "af_sky");
+  assert.equal(submit.form.instruct, "warm, calm narrator");
 });
 
-test("generateVoice honors the envelope content_type when present", async (t) => {
-  installPaiFetch(t, () => jsonResponse({ body_base64: MP3_B64, content_type: "audio/mp3" }));
+test("generateVoice uses voice_design mode when the model advertises supports_voice_design", async (t) => {
+  // Override the Kokoro catalog entry to advertise voice_design instead
+  // of preset voices — env can't steer this (model_registry reads
+  // DEAPI_TTS_MODEL at import time, already resolved to Kokoro).
+  const catalog = cloneCatalogWith("Kokoro", { info: { features: { supports_voice_design: true } } });
+  const calls = installDeapiFetch(t, { catalog });
 
-  const result = await generateVoice({ text: "hi", prompt: "brief" });
-  assert.equal(result.mime, "audio/mp3");
+  await generateVoice({ text: "hello there", prompt: "gravelly villain voice" });
+
+  const submit = calls.find((c) => c.url === "https://deapi.test/api/v2/audio/speech");
+  assert.equal(submit.form.mode, "voice_design");
+  assert.equal(submit.form.instruct, "gravelly villain voice");
+  assert.equal(submit.form.voice, undefined);
 });
 
-test("generateVoice validates text and prompt before the provider call", async (t) => {
-  const calls = installPaiFetch(t, () => jsonResponse({ body_base64: MP3_B64 }));
+test("generateVoice rejects text shorter than the model's min_text before any provider call", async (t) => {
+  const catalog = cloneCatalogWith("Kokoro", { info: { limits: { min_text: 10 } } });
+  const calls = installDeapiFetch(t, { catalog });
 
   await assert.rejects(
-    generateVoice({ prompt: "narrator" }),
-    (e) => e.klass === "bad_args" && /empty text/.test(e.message),
+    generateVoice({ text: "short", prompt: "a voice" }),
+    (e) => e.klass === "bad_args" && /at least 10/.test(e.message),
   );
-  await assert.rejects(
-    generateVoice({ text: "   ", prompt: "narrator" }),
-    (e) => e.klass === "bad_args" && /empty text/.test(e.message),
-  );
-  await assert.rejects(
-    generateVoice({ text: "hello" }),
-    (e) => e.klass === "bad_args" && /voice design brief required/.test(e.message),
-  );
-  assert.equal(calls.length, 0);
+  assert.equal(calls.filter((c) => c.method === "POST").length, 0, "no paid calls on validation failures");
 });
 
-test("generateVoice treats 200 with no body_base64 as transient and names the keys it got", async (t) => {
-  installPaiFetch(t, () => jsonResponse({ content_type: "audio/mpeg", request_id: "req_1" }));
+test("generateVoice rejects empty text and empty prompt before any provider call", async (t) => {
+  const calls = installDeapiFetch(t);
 
-  await assert.rejects(
-    generateVoice({ text: "hi", prompt: "brief" }),
-    (e) => e.klass === "transient"
-      && /no body_base64/.test(e.message)
-      && /content_type/.test(e.message),
-  );
+  await assert.rejects(generateVoice({ prompt: "a voice" }), (e) => e.klass === "bad_args" && /empty text/.test(e.message));
+  await assert.rejects(generateVoice({ text: "hello" }), (e) => e.klass === "bad_args" && /empty prompt/.test(e.message));
+  assert.equal(calls.filter((c) => c.method === "POST").length, 0);
 });
 
-test("generateVoice treats body_base64 that decodes to zero bytes as transient", async (t) => {
-  installPaiFetch(t, () => jsonResponse({ body_base64: "!!!" }));
+test("generateVoice maps HTTP 401 on submit to infra", async (t) => {
+  installDeapiFetch(t, {
+    handler(entry) {
+      if (entry.url.endsWith("/api/v2/audio/speech") && entry.method === "POST") {
+        return jsonResponse({ message: "Unauthenticated." }, 401);
+      }
+      return undefined;
+    },
+  });
 
   await assert.rejects(
-    generateVoice({ text: "hi", prompt: "brief" }),
-    (e) => e.klass === "transient" && /bytes are empty/.test(e.message),
-  );
-});
-
-test("generateVoice maps HTTP 401 to infra", async (t) => {
-  installPaiFetch(t, () => jsonResponse({ detail: "invalid api key" }, 401));
-
-  await assert.rejects(
-    generateVoice({ text: "hi", prompt: "brief" }),
-    (e) => e.klass === "infra" && /PAI 401/.test(e.message) && /invalid api key/.test(e.message),
+    generateVoice({ text: "hello there", prompt: "a voice" }),
+    (e) => e.klass === "infra" && /401/.test(e.message),
   );
 });

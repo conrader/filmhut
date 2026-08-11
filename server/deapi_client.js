@@ -456,10 +456,28 @@ function clampNum(v, min, max) {
   return n;
 }
 
+// Rank two candidate frames: closest aspect ratio wins, ties (within
+// `eps`) go to the frame nearest the requested long side, then to the
+// larger frame.
+function betterDimension(cand, best, eps) {
+  if (cand.errPct < best.errPct - eps) return true;
+  if (cand.errPct > best.errPct + eps) return false;
+  if (cand.drift !== best.drift) return cand.drift < best.drift;
+  return cand.area > best.area;
+}
+
 /**
  * Compute legal { width, height } for a model from an aspect ratio
- * string ("16:9") and a target long side in pixels, snapped to the
- * model's resolution_step and clamped into its min/max box.
+ * string ("16:9") and a target long side in pixels, on the model's
+ * resolution_step grid and inside its min/max box.
+ *
+ * Snapping the long side and then rounding the short side onto the grid
+ * distorts the aspect ratio (16:9 at a 1280 long side on a 32px grid
+ * lands on 1280x736 = 1.74, not 1.78). So instead we search the grid
+ * points within a couple of steps of the requested long side and keep
+ * the pair whose ratio is closest to the request, breaking ties toward
+ * the larger frame. For 16:9/1280 on a 32px grid that yields
+ * 1248x704 = 1.7727 — within 0.3% of 1.7778.
  */
 export function deriveDimensions(modelEntry, { aspectRatio = "16:9", longSide = 1024 } = {}) {
   const limits = modelEntry?.info?.limits ?? {};
@@ -474,16 +492,52 @@ export function deriveDimensions(modelEntry, { aspectRatio = "16:9", longSide = 
   const arH = m ? Number(m[2]) : 9;
   const ratio = arW / arH; // width / height
 
-  const snap = (v) => Math.round(v / step) * step;
-  let width, height;
-  if (ratio >= 1) {
-    width = clampNum(snap(longSide), minW, maxW);
-    height = clampNum(snap(width / ratio), minH, maxH);
-  } else {
-    height = clampNum(snap(longSide), minH, maxH);
-    width = clampNum(snap(height * ratio), minW, maxW);
+  const snapTo = (v, min, max) => {
+    const snapped = Math.round(clampNum(v, min, max) / step) * step;
+    return clampNum(snapped, Math.ceil(min / step) * step, Math.floor(max / step) * step);
+  };
+
+  const landscape = ratio >= 1;
+  const longMin = landscape ? minW : minH;
+  const longMax = landscape ? maxW : maxH;
+  const shortMin = landscape ? minH : minW;
+  const shortMax = landscape ? maxH : maxW;
+
+  const longBase = snapTo(longSide, longMin, longMax);
+  // Ratio errors this close together are indistinguishable in the output;
+  // prefer the frame nearest the requested size instead, since pixels are
+  // what deAPI bills for.
+  const TIE_EPS = 0.001; // 0.1 percentage point
+  let best = null;
+  // ±2 grid steps on the long side, both roundings on the short side.
+  for (let i = -2; i <= 2; i++) {
+    const lng = clampNum(longBase + i * step, longMin, longMax);
+    if (lng < step) continue;
+    const idealShort = landscape ? lng / ratio : lng * ratio;
+    for (const raw of [Math.floor(idealShort / step) * step, Math.ceil(idealShort / step) * step]) {
+      const shrt = clampNum(raw, shortMin, shortMax);
+      if (shrt < step) continue;
+      const got = landscape ? lng / shrt : shrt / lng;
+      const cand = {
+        lng,
+        shrt,
+        errPct: Math.abs(got - ratio) / ratio,
+        drift: Math.abs(lng - longBase),
+        area: lng * shrt,
+      };
+      if (!best || betterDimension(cand, best, TIE_EPS)) best = cand;
+    }
   }
-  return { width, height };
+  if (!best) {
+    // Degenerate limits (box smaller than one grid step) — fall back to
+    // the plain snap so we still emit something legal.
+    const w = snapTo(landscape ? longSide : longSide * ratio, minW, maxW);
+    const h = snapTo(landscape ? longSide / ratio : longSide, minH, maxH);
+    return { width: Math.max(w, step), height: Math.max(h, step) };
+  }
+  return landscape
+    ? { width: best.lng, height: best.shrt }
+    : { width: best.shrt, height: best.lng };
 }
 
 /**

@@ -13,7 +13,7 @@ Read `workflow.json` and identify:
 
 Decide how many mosaics to emit:
 
-- **Shot notes exist:** one mosaic per shot note. Pass `--source-node-id <shot_note_id>`, relevant location/character refs (≤32), and verbatim shot body as `[SCRIPT SLICE]`.
+- **Shot notes exist:** one mosaic per shot note. Pass `--source-node-id <shot_note_id>`, relevant location/character refs up to the edit model's live cap (typically small, ~3; the CLI's error message names the real cap when exceeded), and verbatim shot body as `[SCRIPT SLICE]`.
 - **No shot notes, one <=15s brief:** one 2×2 mosaic. Pass `--source-node-id <script_note_id>` if applicable plus relevant refs.
 - **Longer script/story:** recommend `script-compose` splitting first unless user explicitly asks for overview board.
 

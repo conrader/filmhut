@@ -1,222 +1,159 @@
-// Unit tests for pai_video_client. Mocks globalThis.fetch for both the
-// submit POST and the status-poll GETs, and uses node:test mock timers to
-// fast-forward pollStatus's 5s interval sleeps (same pattern as
-// pai_assets_client.test.js).
+// Unit tests for pai_video_client (deAPI-backed). submitVideo picks one
+// of three deAPI routes from the refs (text/image/audio); pollVideo
+// polls the job to terminal. Mirrors pai_image_client.test.js's style.
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import { submitVideo, pollVideo } from "../pai_video_client.js";
+import {
+  installDeapiFetch,
+  jsonResponse,
+  errorJob,
+  PNG_BYTES,
+  DEFAULT_RESULT_URL,
+} from "./helpers/deapi_fetch_mock.js";
 
-function jsonResponse(body, status = 200) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
+function writeTmpFile(t, name, bytes = PNG_BYTES) {
+  const p = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "deapi-video-test-")), name);
+  fs.writeFileSync(p, bytes);
+  t.after(() => fs.rmSync(path.dirname(p), { recursive: true, force: true }));
+  return p;
 }
 
-function installPaiFetch(t, handler) {
-  const priorFetch = globalThis.fetch;
-  const priorKey = process.env.PAI_KEY;
-  const priorBase = process.env.PAI_API_BASE;
-  const calls = [];
+test("submitVideo with no refs submits JSON to videos/generations", async (t) => {
+  const calls = installDeapiFetch(t);
 
-  globalThis.fetch = async (url, opts = {}) => {
-    let body = null;
-    try { body = JSON.parse(opts.body || "null"); } catch {}
-    const entry = { url: String(url), method: opts.method, body };
-    calls.push(entry);
-    return handler(entry);
-  };
-  process.env.PAI_KEY = "PAI_test";
-  process.env.PAI_API_BASE = "https://pai.test";
-
-  t.after(() => {
-    globalThis.fetch = priorFetch;
-    if (priorKey === undefined) delete process.env.PAI_KEY;
-    else process.env.PAI_KEY = priorKey;
-    if (priorBase === undefined) delete process.env.PAI_API_BASE;
-    else process.env.PAI_API_BASE = priorBase;
+  const result = await submitVideo({
+    prompt: "a drone shot over a canyon",
+    duration: 5,
+    aspectRatio: "16:9",
+    resolution: "720p",
   });
 
-  return calls;
-}
+  assert.equal(result.taskId, "req-1");
+  assert.equal(result.costUsd, 0.0042);
+  assert.equal(result.effective.route, "videos/generations");
 
-// pollStatus sleeps 5s (setTimeout) before every poll. Mock timers skip the
-// wait without making each test take 5s per poll; setImmediate /
-// queueMicrotask etc are left alone so awaited fetch responses still resolve.
-function withFakeTimers(fn) {
-  return async (t) => {
-    t.mock.timers.enable({ apis: ["setTimeout"] });
-    try {
-      // Eagerly drain any setTimeout that the code under test schedules;
-      // process.nextTick lets awaited promises chain before we tick.
-      const drain = setInterval(() => {
-        process.nextTick(() => {
-          try { t.mock.timers.tick(10_000); } catch { /* timers may be reset by t */ }
-        });
-      }, 5);
-      try {
-        await fn(t);
-      } finally {
-        clearInterval(drain);
-      }
-    } finally {
-      t.mock.timers.reset();
-    }
-  };
-}
-
-const SUBMIT_OK = { code: 0, job_id: "job_1", model: "video-generation", status: "QUEUED" };
-
-test("submitVideo sends the raw video-generation payload with defaults and returns the job id", async (t) => {
-  const calls = installPaiFetch(t, () => jsonResponse(SUBMIT_OK));
-
-  const result = await submitVideo({ prompt: "a slow dolly across the harbor" });
-
-  assert.equal(result.taskId, "job_1");
-  assert.deepEqual(result.raw, SUBMIT_OK);
-
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].url, "https://pai.test/api/v1/submit");
-  assert.equal(calls[0].method, "POST");
-  assert.deepEqual(calls[0].body, {
-    model: "video-generation",
-    payload: {
-      model: "pai-pro-video-endpoint-01",
-      content: [{ type: "text", text: "a slow dolly across the harbor" }],
-      generate_audio: true,
-      ratio: "16:9",
-      duration: 15,
-      resolution: "720p",
-      watermark: false,
-    },
-  });
+  const submit = calls.find((c) => c.url === "https://deapi.test/api/v2/videos/generations" && c.method === "POST");
+  assert.ok(submit, "expected a POST to videos/generations");
+  assert.equal(submit.body.model, "Ltx2_3_22B_Dist_INT8");
+  assert.equal(submit.body.fps, 24);
+  // duration 5s * 24fps = 120 frames, inside [9, 241].
+  assert.equal(submit.body.frames, 120);
+  assert.equal(submit.body.steps, 8);
+  assert.equal(submit.body.guidance, 3);
+  assert.equal(submit.body.seed, -1);
+  // 720p 16:9 on a 32px grid: no grid point hits 1.7778 exactly, so
+  // deriveDimensions searches ±2 steps and keeps the closest ratio —
+  // 1312x736 = 1.7826, within 0.3% of 16:9.
+  assert.equal(submit.body.width, 1312);
+  assert.equal(submit.body.height, 736);
+  assert.ok(Math.abs((1312 / 736) - (16 / 9)) / (16 / 9) < 0.005);
 });
 
-test("submitVideo orders reference parts after the prompt with the right roles", async (t) => {
-  const calls = installPaiFetch(t, () => jsonResponse(SUBMIT_OK));
+test("submitVideo with image refs routes to videos/animations", async (t) => {
+  const calls = installDeapiFetch(t);
+  const ref1 = writeTmpFile(t, "first.png");
 
-  await submitVideo({
-    prompt: "animate the storyboard",
-    duration: "8", // CLI flags arrive as strings — Number() coercion is load-bearing
-    aspectRatio: "9:16",
-    resolution: "1080p",
-    generateAudio: false,
-    imageAssetIds: ["img-1", "img-2"],
-    audioAssetIds: ["aud-1"],
-    videoAssetIds: ["vid-1"],
-  });
+  const result1 = await submitVideo({ prompt: "animate", imageRefPaths: [ref1] });
+  assert.equal(result1.effective.route, "videos/animations");
+  const submit1 = calls.find((c) => c.url.endsWith("/api/v2/videos/animations"));
+  assert.ok(submit1.form, "animations submit must be multipart");
+  assert.equal(submit1.form.first_frame_image.filename, "first.png");
+  assert.equal(submit1.form.last_frame_image, undefined);
 
-  const payload = calls[0].body.payload;
-  assert.equal(payload.duration, 8);
-  assert.equal(payload.ratio, "9:16");
-  assert.equal(payload.resolution, "1080p");
-  assert.equal(payload.generate_audio, false);
-  assert.deepEqual(payload.content, [
-    { type: "text", text: "animate the storyboard" },
-    { type: "image_url", image_url: { url: "asset://img-1" }, role: "reference_image" },
-    { type: "image_url", image_url: { url: "asset://img-2" }, role: "reference_image" },
-    { type: "audio_url", audio_url: { url: "asset://aud-1" }, role: "reference_audio" },
-    { type: "video_url", video_url: { url: "asset://vid-1" }, role: "reference_video" },
-  ]);
-});
+  const ref2 = writeTmpFile(t, "last.png");
+  await submitVideo({ prompt: "animate with last frame", imageRefPaths: [ref1, ref2] });
+  const submit2 = calls.filter((c) => c.url.endsWith("/api/v2/videos/animations")).at(-1);
+  assert.equal(submit2.form.first_frame_image.filename, "first.png");
+  assert.equal(submit2.form.last_frame_image.filename, "last.png");
 
-test("submitVideo rejects an empty prompt before the provider call", async (t) => {
-  const calls = installPaiFetch(t, () => jsonResponse(SUBMIT_OK));
-
+  const ref3 = writeTmpFile(t, "extra.png");
   await assert.rejects(
-    submitVideo({ prompt: "   " }),
-    (e) => e.klass === "bad_args" && /empty prompt/.test(e.message),
-  );
-  await assert.rejects(
-    submitVideo(),
-    (e) => e.klass === "bad_args" && /empty prompt/.test(e.message),
-  );
-  assert.equal(calls.length, 0);
-});
-
-test("submitVideo classifies a non-zero submit envelope (queue full → rate_limited)", async (t) => {
-  installPaiFetch(t, () => jsonResponse({ code: 1004, message: "queue is full", retry_after: 30 }));
-
-  await assert.rejects(
-    submitVideo({ prompt: "x" }),
-    (e) => e.klass === "rate_limited" && /queue full/.test(e.message) && e.retryAfterSec === 30,
+    submitVideo({ prompt: "too many", imageRefPaths: [ref1, ref2, ref3] }),
+    (e) => e.klass === "bad_args",
   );
 });
 
-test("pollVideo polls to SUCCESS and surfaces the rehosted output_url", withFakeTimers(async (t) => {
-  const statuses = [
-    { status: "QUEUED" },
-    { status: "PROCESSING" },
-    {
-      status: "SUCCESS",
-      output_url: "https://cdn.pai.test/final.mp4",
-      raw_response: { video_url: "https://upstream.test/signed.mp4" },
-    },
-  ];
-  let poll = 0;
-  const calls = installPaiFetch(t, () => jsonResponse(statuses[Math.min(poll++, statuses.length - 1)]));
+test("submitVideo with an audio ref routes to videos/audio-syncs", async (t) => {
+  const calls = installDeapiFetch(t);
+  const audio1 = writeTmpFile(t, "voice.mp3");
 
-  const progress = [];
-  const result = await pollVideo("job_1", { onProgress: (p) => progress.push(p.status) });
+  const result = await submitVideo({ prompt: "sync to voice", audioRefPaths: [audio1] });
+  assert.equal(result.effective.route, "videos/audio-syncs");
+  const submit = calls.find((c) => c.url.endsWith("/api/v2/videos/audio-syncs"));
+  assert.ok(submit.form, "audio-syncs submit must be multipart");
+  assert.equal(submit.form.audio.filename, "voice.mp3");
 
-  // output_url (PAI's long-lived rehost) wins over the upstream signed URL.
-  assert.equal(result.videoUrl, "https://cdn.pai.test/final.mp4");
-  assert.deepEqual(result.raw, statuses[2]);
+  // an image ref may ride along as first_frame_image on the same route.
+  const image = writeTmpFile(t, "frame.png");
+  await submitVideo({ prompt: "sync with frame", audioRefPaths: [audio1], imageRefPaths: [image] });
+  const submit2 = calls.filter((c) => c.url.endsWith("/api/v2/videos/audio-syncs")).at(-1);
+  assert.equal(submit2.form.first_frame_image.filename, "frame.png");
+
+  const audio2 = writeTmpFile(t, "voice2.mp3");
+  await assert.rejects(
+    submitVideo({ prompt: "too many audios", audioRefPaths: [audio1, audio2] }),
+    (e) => e.klass === "bad_args",
+  );
+});
+
+test("submitVideo rejects video refs before any provider call", async (t) => {
+  const calls = installDeapiFetch(t);
+  const clip = writeTmpFile(t, "clip.mp4");
+
+  await assert.rejects(
+    submitVideo({ prompt: "use a video ref", videoRefPaths: [clip] }),
+    (e) => e.klass === "bad_args" && /video refs/.test(e.message),
+  );
+  assert.equal(calls.filter((c) => c.method === "POST").length, 0, "no paid calls on validation failures");
+});
+
+test("submitVideo rejects an empty prompt before any provider call", async (t) => {
+  const calls = installDeapiFetch(t);
+  await assert.rejects(submitVideo({}), (e) => e.klass === "bad_args");
+  assert.equal(calls.filter((c) => c.method === "POST").length, 0);
+});
+
+test("pollVideo resolves videoUrl from the job's result_url", async (t) => {
+  installDeapiFetch(t);
+  const result = await pollVideo("req-1");
+  assert.equal(result.videoUrl, DEFAULT_RESULT_URL);
   assert.equal(typeof result.durationSeconds, "number");
-  assert.ok(result.durationSeconds >= 0);
+});
 
-  assert.equal(calls.length, 3);
-  assert.equal(calls[0].url, "https://pai.test/api/v1/task/status/job_1");
-  assert.equal(calls[0].method, "GET");
-  assert.deepEqual(progress, ["QUEUED", "PROCESSING", "SUCCESS"]);
-}));
-
-test("pollVideo falls back to raw_response video URLs when output_url is missing", withFakeTimers(async (t) => {
-  const byJob = {
-    job_flat: { status: "SUCCESS", raw_response: { video_url: "https://upstream.test/flat.mp4" } },
-    job_nested: { status: "SUCCESS", raw_response: { content: { video_url: "https://upstream.test/nested.mp4" } } },
-  };
-  installPaiFetch(t, ({ url }) => jsonResponse(byJob[url.split("/").pop()]));
-
-  assert.equal((await pollVideo("job_flat")).videoUrl, "https://upstream.test/flat.mp4");
-  assert.equal((await pollVideo("job_nested")).videoUrl, "https://upstream.test/nested.mp4");
-}));
-
-test("pollVideo throws infra when SUCCESS carries no video URL", withFakeTimers(async (t) => {
-  installPaiFetch(t, () => jsonResponse({ status: "SUCCESS", raw_response: { note: "no url anywhere" } }));
+test("pollVideo maps AGE_RESTRICTED job errors to content_filtered", async (t) => {
+  installDeapiFetch(t, {
+    handler(entry) {
+      if (entry.url.includes("/api/v2/jobs/")) {
+        return jsonResponse(errorJob({ error_code: "AGE_RESTRICTED", error_message: "flagged" }));
+      }
+      return undefined;
+    },
+  });
 
   await assert.rejects(
-    pollVideo("job_nourl"),
-    (e) => e.klass === "infra" && /no video URL/.test(e.message) && /job_nourl/.test(e.message),
+    pollVideo("req-1"),
+    (e) => e.klass === "content_filtered" && /AGE_RESTRICTED/.test(e.message),
   );
-}));
+});
 
-test("pollVideo classifies a FAILED content moderation status as content_filtered", withFakeTimers(async (t) => {
-  installPaiFetch(t, () => jsonResponse({
-    status: "FAILED",
-    error_category: "content",
-    error_message: "output flagged by moderation",
-  }));
+test("pollVideo throws infra when the job finishes with no result_url", async (t) => {
+  installDeapiFetch(t, {
+    handler(entry) {
+      if (entry.url.includes("/api/v2/jobs/")) {
+        return jsonResponse({ data: { status: "done", result_url: null, progress: 100 } });
+      }
+      return undefined;
+    },
+  });
 
   await assert.rejects(
-    pollVideo("job_1"),
-    (e) => e.klass === "content_filtered"
-      && /content moderation/.test(e.message)
-      && /output flagged by moderation/.test(e.message),
+    pollVideo("req-1"),
+    (e) => e.klass === "infra" && /no result_url/.test(e.message),
   );
-}));
-
-test("pollVideo classifies FAILED_REJECTED client_input as bad_args", withFakeTimers(async (t) => {
-  installPaiFetch(t, () => jsonResponse({
-    status: "FAILED_REJECTED",
-    error_category: "client_input",
-    error_message: "unsupported ratio",
-  }));
-
-  await assert.rejects(
-    pollVideo("job_1"),
-    (e) => e.klass === "bad_args" && /client_input/.test(e.message) && /unsupported ratio/.test(e.message),
-  );
-}));
+});

@@ -1,144 +1,120 @@
+// Unit tests for pai_upscale_client (deAPI-backed). quoteUpscale prices
+// via POST /api/v2/videos/upscales/price; submitUpscale uploads the
+// source file inline via POST /api/v2/videos/upscales; pollUpscale polls
+// the job to terminal. Scale is derived from source resolution against
+// a 3840px long-side target, clamped into the model's min/max_scale (or
+// omitted entirely for fixed-factor models).
+
 import test from "node:test";
 import assert from "node:assert/strict";
-import http from "node:http";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { quoteUpscale, submitUpscale, pollUpscale, UPSCALE_MODEL_ID } from "../pai_upscale_client.js";
 import {
-  createUpscale,
-  acceptUpscale,
-  completeUpscale,
-  uploadUpscaleSource,
-} from "../pai_upscale_client.js";
+  installDeapiFetch,
+  jsonResponse,
+  errorJob,
+  DEFAULT_CATALOG,
+  DEFAULT_RESULT_URL,
+} from "./helpers/deapi_fetch_mock.js";
 
-function jsonResponse(body, status = 200) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
+function writeTmpMp4(t) {
+  const p = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "deapi-upscale-test-")), "source.mp4");
+  fs.writeFileSync(p, Buffer.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70]));
+  t.after(() => fs.rmSync(path.dirname(p), { recursive: true, force: true }));
+  return p;
 }
 
-function installPaiFetch(t, handler) {
-  const priorFetch = globalThis.fetch;
-  const priorKey = process.env.PAI_KEY;
-  const priorBase = process.env.PAI_API_BASE;
-  const calls = [];
-
-  globalThis.fetch = async (url, opts = {}) => {
-    let body = null;
-    try { body = JSON.parse(opts.body || "null"); } catch {}
-    const entry = { url: String(url), method: opts.method, body };
-    calls.push(entry);
-    return handler(entry);
-  };
-  process.env.PAI_KEY = "PAI_test";
-  process.env.PAI_API_BASE = "https://pai.test";
-
-  t.after(() => {
-    globalThis.fetch = priorFetch;
-    if (priorKey === undefined) delete process.env.PAI_KEY;
-    else process.env.PAI_KEY = priorKey;
-    if (priorBase === undefined) delete process.env.PAI_API_BASE;
-    else process.env.PAI_API_BASE = priorBase;
-  });
-
-  return calls;
-}
-
-test("video upscale client sends create, accept, and complete payloads", async (t) => {
-  const calls = installPaiFetch(t, ({ url, body }) => {
-    assert.match(url, /^https:\/\/pai\.test\/api\/v1\/(?:generate|submit)$/);
-    if (body?.model === "upscale-create") {
-      return jsonResponse({ requestId: "up_req_123", estimates: { price_usd: 1.23, time_sec: 45 } });
-    }
-    if (body?.model === "upscale-accept") {
-      return jsonResponse({ urls: ["https://upload.test/object"] });
-    }
-    if (body?.model === "upscale-complete") {
-      return jsonResponse({ code: 0, job_id: "job_123", status: "QUEUED" });
-    }
-    return jsonResponse({ detail: "unexpected model" }, 400);
-  });
-
-  const createPayload = {
-    source: { resolution: { width: 1280, height: 720 } },
-    output: { resolution: { width: 3840, height: 2160 } },
-    filters: [{ model: "prob-4" }],
-  };
-  const created = await createUpscale(createPayload);
-  const accepted = await acceptUpscale(created.requestId);
-  const completed = await completeUpscale({
-    requestId: created.requestId,
-    uploadResult: { partNum: 1, eTag: "etag-123" },
-  });
-
-  assert.deepEqual(created, {
-    requestId: "up_req_123",
-    estimates: { price_usd: 1.23, time_sec: 45 },
-    raw: { requestId: "up_req_123", estimates: { price_usd: 1.23, time_sec: 45 } },
-  });
-  assert.equal(accepted.uploadUrl, "https://upload.test/object");
-  assert.equal(completed.taskId, "job_123");
-
-  assert.deepEqual(calls.map((c) => c.body.model), [
-    "upscale-create",
-    "upscale-accept",
-    "upscale-complete",
-  ]);
-  assert.deepEqual(calls[0].body.payload, createPayload);
-  assert.deepEqual(calls[1].body.payload, { request_id: "up_req_123" });
-  assert.deepEqual(calls[2].body.payload, {
-    request_id: "up_req_123",
-    payload: { uploadResults: [{ partNum: 1, eTag: "etag-123" }] },
-  });
+test("UPSCALE_MODEL_ID is the registry capability id", () => {
+  assert.equal(UPSCALE_MODEL_ID, "video-upscale");
 });
 
-function makeUploadServer() {
-  const requests = [];
-  const server = http.createServer((req, res) => {
-    if (req.method !== "PUT" || req.url !== "/upload") {
-      res.statusCode = 404;
-      res.end("not found");
-      return;
-    }
-    const chunks = [];
-    req.on("data", (chunk) => chunks.push(chunk));
-    req.on("end", () => {
-      requests.push({
-        headers: req.headers,
-        body: Buffer.concat(chunks),
-      });
-      res.setHeader("ETag", "\"etag-456\"");
-      res.end();
-    });
-  });
-  return new Promise((resolve) => {
-    server.listen(0, "127.0.0.1", () => {
-      const { port } = server.address();
-      resolve({ server, url: `http://127.0.0.1:${port}/upload`, requests });
-    });
-  });
-}
+test("quoteUpscale prices from source dimensions and derives scale toward 4K", async (t) => {
+  const calls = installDeapiFetch(t);
 
-test("uploadUpscaleSource sends one PUT and returns one upload result", async (t) => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "pai-upscale-client-"));
-  const filePath = path.join(dir, "clip.mp4");
-  await writeFile(filePath, Buffer.from("video-bytes"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  const result = await quoteUpscale({ sourceSpec: { width: 1280, height: 720, duration: 5, size: 1_000_000 } });
+  assert.equal(result.costUsd, 0.0042);
+  // 3840 / 1280 = 3, inside FlashVSR_Tiny's [2, 4] range.
+  assert.equal(result.scale, 3);
+  assert.equal(result.modelSlug, "FlashVSR_Tiny");
 
-  const srv = await makeUploadServer();
-  t.after(() => new Promise((resolve) => srv.server.close(resolve)));
+  const priced = calls.find((c) => c.url.endsWith("/api/v2/videos/upscales/price") && c.method === "POST");
+  assert.ok(priced, "expected a POST to videos/upscales/price");
+  assert.equal(priced.body.model, "FlashVSR_Tiny");
+  assert.equal(priced.body.width, 1280);
+  assert.equal(priced.body.height, 720);
+  assert.equal(priced.body.duration, 5);
+  assert.equal(priced.body.scale, 3);
+});
 
-  const result = await uploadUpscaleSource({
-    uploadUrl: srv.url,
+test("quoteUpscale rejects a source over the model's duration cap or the 50MB size cap", async (t) => {
+  const calls = installDeapiFetch(t);
+
+  await assert.rejects(
+    quoteUpscale({ sourceSpec: { width: 1280, height: 720, duration: 61, size: 1_000_000 } }),
+    (e) => e.klass === "bad_args" && /60s/.test(e.message),
+  );
+  await assert.rejects(
+    quoteUpscale({ sourceSpec: { width: 1280, height: 720, duration: 5, size: 51 * 1024 * 1024 } }),
+    (e) => e.klass === "bad_args" && /50MB/.test(e.message),
+  );
+  assert.equal(calls.filter((c) => c.method === "POST").length, 0, "no paid calls on validation failures");
+});
+
+test("quoteUpscale omits scale for a fixed-factor model (min/max_scale null)", async (t) => {
+  const catalog = DEFAULT_CATALOG.map((m) => (m.slug !== "FlashVSR_Tiny" ? m : {
+    ...m,
+    info: { ...m.info, limits: { ...m.info.limits, min_scale: null, max_scale: null } },
+  }));
+  const calls = installDeapiFetch(t, { catalog });
+
+  const result = await quoteUpscale({ sourceSpec: { width: 1280, height: 720, duration: 5, size: 1_000_000 } });
+  assert.equal(result.scale, null);
+
+  const priced = calls.find((c) => c.url.endsWith("/api/v2/videos/upscales/price"));
+  assert.equal(priced.body.scale, undefined);
+});
+
+test("submitUpscale uploads the source file as multipart with model and scale", async (t) => {
+  const filePath = writeTmpMp4(t);
+  const calls = installDeapiFetch(t);
+
+  const result = await submitUpscale({
     filePath,
-    contentType: "video/mp4",
+    sourceSpec: { width: 1280, height: 720, duration: 5, size: fs.statSync(filePath).size },
+  });
+  assert.equal(result.taskId, "req-1");
+  assert.equal(result.scale, 3);
+
+  const submit = calls.find((c) => c.url === "https://deapi.test/api/v2/videos/upscales" && c.method === "POST");
+  assert.ok(submit, "expected a POST to videos/upscales");
+  assert.ok(submit.form, "upscale submit must be multipart form data");
+  assert.equal(submit.form.model, "FlashVSR_Tiny");
+  assert.equal(submit.form.scale, "3");
+  assert.equal(submit.form.video.filename, "source.mp4");
+});
+
+test("pollUpscale resolves videoUrl from the job's result_url", async (t) => {
+  installDeapiFetch(t);
+  const result = await pollUpscale("req-1");
+  assert.equal(result.videoUrl, DEFAULT_RESULT_URL);
+  assert.equal(typeof result.durationSeconds, "number");
+});
+
+test("pollUpscale maps a job error to its classified klass", async (t) => {
+  installDeapiFetch(t, {
+    handler(entry) {
+      if (entry.url.includes("/api/v2/jobs/")) {
+        return jsonResponse(errorJob({ error_code: "WORKER_TIMEOUT", error_message: "gave up" }));
+      }
+      return undefined;
+    },
   });
 
-  assert.deepEqual(result, { partNum: 1, eTag: "etag-456" });
-  assert.equal(srv.requests.length, 1);
-  assert.equal(srv.requests[0].headers["content-type"], "video/mp4");
-  assert.equal(srv.requests[0].headers["content-length"], String(Buffer.byteLength("video-bytes")));
-  assert.deepEqual(srv.requests[0].body, Buffer.from("video-bytes"));
+  await assert.rejects(
+    pollUpscale("req-1"),
+    (e) => e.klass === "transient" && /WORKER_TIMEOUT/.test(e.message),
+  );
 });

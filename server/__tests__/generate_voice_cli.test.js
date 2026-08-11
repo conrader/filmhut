@@ -1,9 +1,10 @@
-// Full-path spawn tests for cli/generate_voice.js (PAI raw tts).
+// Full-path spawn tests for cli/generate_voice.js (deAPI tts).
 //
-// Cloned from generate_image_pro_cli.test.js: fake PAI server (PAI_API_BASE),
-// fake viewer HTTP server for /mutate + /preupload-asset, runCli spawn
-// helper, throwaway project under PAI_REPO_ROOT/projects (local_mirror.js
-// hardcodes that root, so PAI_PROJECTS_DIR can't redirect the CLIs).
+// Cloned from generate_image_pro_cli.test.js: fake deAPI server
+// (DEAPI_API_BASE), fake viewer HTTP server for /mutate + /preupload-asset,
+// runCli spawn helper, throwaway project under PAI_REPO_ROOT/projects
+// (local_mirror.js hardcodes that root, so PAI_PROJECTS_DIR can't redirect
+// the CLIs).
 // One deliberate upgrade over the pro harness: the fake viewer routes
 // /mutate through the real canvas_mutator, so tests can assert the node
 // actually landed in workflow.json and the staged tmp file was renamed
@@ -19,6 +20,7 @@ import http from "node:http";
 
 import { PAI_REPO_ROOT } from "../lib/paths.js";
 import { mutate, initProjectMutatorState } from "../canvas_mutator.js";
+import { makeDeapiServer } from "./helpers/deapi_cli_fake_server.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const CLI_DIR = join(__dirname, "..", "cli");
@@ -43,6 +45,14 @@ function runCli({ script, args, cwd, env }) {
 function parseReply(stdout) {
   const lines = stdout.trim().split("\n").filter((l) => l.trim().startsWith("{"));
   return JSON.parse(lines[lines.length - 1]);
+}
+
+function deapiEnv(deapi) {
+  return {
+    DEAPI_KEY: "dpn-sk-test",
+    DEAPI_API_BASE: deapi.url,
+    DEAPI_POLL_INTERVAL_MS: "10",
+  };
 }
 
 // Seeds an image_1 anchor node so --source-node-id can draw a derived edge.
@@ -72,40 +82,6 @@ async function setupProject(t) {
   );
   t.after(() => rm(dir, { recursive: true, force: true }));
   return { projectId, dir };
-}
-
-// generateStatus !== 200 makes every /api/v1/generate attempt fail with that
-// HTTP status. 400 classifies as bad_args and is not retried.
-function makePaiServer({ generateStatus = 200 } = {}) {
-  const captures = { generateBodies: [] };
-  const server = http.createServer((req, res) => {
-    if (req.method === "POST" && req.url === "/api/v1/generate") {
-      let raw = "";
-      req.on("data", (chunk) => { raw += chunk; });
-      req.on("end", () => {
-        captures.generateBodies.push(raw ? JSON.parse(raw) : {});
-        res.setHeader("content-type", "application/json");
-        if (generateStatus !== 200) {
-          res.statusCode = generateStatus;
-          res.end(JSON.stringify({ detail: "synthetic tts rejection" }));
-          return;
-        }
-        res.end(JSON.stringify({
-          body_base64: MP3_BYTES.toString("base64"),
-          content_type: "audio/mpeg",
-        }));
-      });
-      return;
-    }
-    res.statusCode = 404;
-    res.end("not found");
-  });
-  return new Promise((resolve) => {
-    server.listen(0, "127.0.0.1", () => {
-      const { port } = server.address();
-      resolve({ server, url: `http://127.0.0.1:${port}`, captures });
-    });
-  });
 }
 
 // Fake viewer that applies /mutate envelopes through the real mutator, so
@@ -157,8 +133,8 @@ async function makeViewerServer({ dir, projectId }) {
 
 test("generate_voice.js direct fire lands anchored audio node + mp3 asset", async (t) => {
   const { projectId, dir } = await setupProject(t);
-  const pai = await makePaiServer();
-  t.after(() => new Promise((resolve) => pai.server.close(resolve)));
+  const deapi = await makeDeapiServer({ resultExt: "mp3", resultBytes: MP3_BYTES, resultContentType: "audio/mpeg" });
+  t.after(() => new Promise((resolve) => deapi.server.close(resolve)));
   const viewer = await makeViewerServer({ dir, projectId });
   t.after(() => new Promise((resolve) => viewer.server.close(resolve)));
 
@@ -174,8 +150,7 @@ test("generate_voice.js direct fire lands anchored audio node + mp3 asset", asyn
     ],
     cwd: dir,
     env: {
-      PAI_KEY: "PAI_test",
-      PAI_API_BASE: pai.url,
+      ...deapiEnv(deapi),
       VIEWER_HOST: "127.0.0.1",
       VIEWER_PORT: String(viewer.port),
     },
@@ -195,15 +170,20 @@ test("generate_voice.js direct fire lands anchored audio node + mp3 asset", asyn
   assert.equal(reply.canvas_mutation.node_id, "audio_1");
   assert.equal(reply.canvas_mutation.version, 1);
 
-  // Upstream wire contract (text → input, prompt → instructions).
-  assert.equal(pai.captures.generateBodies.length, 1);
-  const sent = pai.captures.generateBodies[0];
-  assert.equal(sent.model, "tts");
-  assert.equal(sent.payload.model, "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign");
-  assert.equal(sent.payload.input, text);
-  assert.equal(sent.payload.instructions, brief);
-  assert.equal(sent.payload.task_type, "VoiceDesign");
-  assert.equal(sent.payload.response_format, "mp3");
+  // Upstream wire contract: multipart submit to audio/speech. Default
+  // catalog model (Kokoro) has no voice_design support → custom_voice mode
+  // with its first advertised voice preset (af_sky); the brief still rides
+  // along as the style/emotion `instruct` field.
+  assert.equal(deapi.captures.submits.length, 1);
+  const submit = deapi.captures.submits[0];
+  assert.equal(submit.url, "/api/v2/audio/speech");
+  const sentFields = submit.form.fields;
+  assert.equal(sentFields.model, "Kokoro");
+  assert.equal(sentFields.text, text);
+  assert.equal(sentFields.instruct, brief);
+  assert.equal(sentFields.mode, "custom_voice");
+  assert.equal(sentFields.voice, "af_sky");
+  assert.equal(sentFields.format, "mp3");
 
   // Node + authorship edge landed in workflow.json via the real mutator.
   const wf = JSON.parse(await readFile(join(dir, "workflow.json"), "utf8"));
@@ -216,10 +196,10 @@ test("generate_voice.js direct fire lands anchored audio node + mp3 asset", asyn
   assert.equal(node.data.prompt, brief);
   assert.equal(node.data.source_id, "image_1");
   assert.equal(node.data.local_path, "assets/audios/audio_1.mp3");
-  assert.equal(node.data.metadata.source, "pai");
+  assert.equal(node.data.metadata.source, "deapi");
   assert.equal(node.data.metadata.task_type, "tts");
   assert.equal(node.data.metadata.model, "tts");
-  assert.ok(!("duration_sec" in node.data.metadata), "tts envelope has no duration");
+  assert.ok(!("duration_sec" in node.data.metadata), "deAPI tts envelope has no duration");
   assert.ok(node.data.metadata.pending_job_id.startsWith("pending_"));
   assert.deepEqual(wf.edges, [{ from: "image_1", to: "audio_1", kind: "derived" }]);
 
@@ -241,10 +221,13 @@ test("generate_voice.js direct fire lands anchored audio node + mp3 asset", asyn
   assert.deepEqual(await readdir(join(dir, ".pending")), []);
 });
 
-test("generate_voice.js PAI 400 exits 1 with bad_args and no retry", async (t) => {
+test("generate_voice.js deAPI 422 exits 1 with bad_args and no retry", async (t) => {
   const { projectId, dir } = await setupProject(t);
-  const pai = await makePaiServer({ generateStatus: 400 });
-  t.after(() => new Promise((resolve) => pai.server.close(resolve)));
+  const deapi = await makeDeapiServer({
+    submitStatus: 422,
+    submitErrorBody: { message: "synthetic tts rejection" },
+  });
+  t.after(() => new Promise((resolve) => deapi.server.close(resolve)));
   const viewer = await makeViewerServer({ dir, projectId });
   t.after(() => new Promise((resolve) => viewer.server.close(resolve)));
 
@@ -257,8 +240,7 @@ test("generate_voice.js PAI 400 exits 1 with bad_args and no retry", async (t) =
     ],
     cwd: dir,
     env: {
-      PAI_KEY: "PAI_test",
-      PAI_API_BASE: pai.url,
+      ...deapiEnv(deapi),
       VIEWER_HOST: "127.0.0.1",
       VIEWER_PORT: String(viewer.port),
     },
@@ -268,15 +250,15 @@ test("generate_voice.js PAI 400 exits 1 with bad_args and no retry", async (t) =
   const reply = parseReply(stdout);
   assert.equal(reply.ok, false);
   assert.equal(reply.klass, "bad_args");
-  assert.match(reply.message, /PAI 400: synthetic tts rejection/);
+  assert.match(reply.message, /deAPI 422: synthetic tts rejection/);
   assert.deepEqual(reply.limits, {});
   assert.deepEqual(reply.sent, {
     text_chars: "doomed line".length,
     prompt_chars: "doomed brief".length,
     source_node_id: null,
   });
-  // bad_args fails fast — exactly one upstream attempt.
-  assert.equal(pai.captures.generateBodies.length, 1);
+  // bad_args fails fast — exactly one upstream submit attempt.
+  assert.equal(deapi.captures.submits.length, 1);
 
   // No new node, no asset, no leftover tmp; failure sidecar persisted.
   const wf = JSON.parse(await readFile(join(dir, "workflow.json"), "utf8"));

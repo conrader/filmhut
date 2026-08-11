@@ -58,7 +58,7 @@ Reply `1` to proceed, or describe what you want.
 
 Before the first image or video generation in this project/session, ask once per capability with the structured question shape above, then remember the answer in session. Put the price in each option label.
 
-Image choices: `Standard 1K ~$0.003` recommended, `Standard 2K ~$0.011`, `Standard 4K ~$0.043`. Pro image edits ~$0.035. Video is quoted per call (~$0.01-0.05/s depending on resolution); voice is ~$0.77 per 1M characters; upscale is quoted per call, linear in duration. If the user already specified quality/resolution, or says "just do it", don't ask; default to `Standard 1K` for images and let `generate_video.js` quote the exact video price. Recipes that require the pro image tier (storyboard mosaics, video-bound character sheets) override the chosen image mode.
+Image choices: `Standard 1K ~$0.003` recommended, `Standard 2K ~$0.011`, `Standard 4K ~$0.043`. Pro image edits ~$0.035. Video is quoted per call (roughly $0.03/s at 480p, $0.07/s at 720p, $0.15/s at 1080p — cost scales with pixels × frames, so resolution and duration both matter); voice is ~$0.77 per 1M characters; upscale is quoted per call, linear in duration. If the user already specified quality/resolution, or says "just do it", don't ask; default to `Standard 1K` for images and let `generate_video.js` quote the exact video price. Recipes that require the pro image tier (storyboard mosaics, video-bound character sheets) override the chosen image mode.
 
 ## Choosing context
 

@@ -105,7 +105,7 @@ Triggers: change/edit/swap/replace/add/remove/tweak/what-if/variation on an exis
 
 Triggers: put character in setting / shot of X and Y / character action in location.
 
-- Identify each character involved — any `image_result` of that person (up to 16). Collect each one's `id`.
+- Identify each character involved — any `image_result` of that person, up to the edit model's live ref cap (typically small, ~3; the CLI's error message names the real cap when exceeded). Collect each one's `id`.
 - `node "$PAI_REPO_ROOT/server/cli/generate_image.js" --prompt "..." --aspect-ratio <fit the shot> --image-size 2K --ref-source-id <char1.id> --ref-source-id <char2.id> ...`.
 - Prompt: the full scene description. Name each character by their role so the generator binds identity to role. Refer to them in the prompt as `@Image1`, `@Image2`, … in `--ref-source-id` order.
 - **No `--subtype`** — a scene is neither a character nor an edit. CLI emits one derived edge per `--ref-source-id`.
@@ -126,7 +126,7 @@ Triggers: storyboard, mosaic, grid, shot list, coverage, keyframe sheet, shot pl
   - "2x2 square storyboard" → `1920x1920`
   - "2x2 portrait storyboard" → `1440x2560`
   - "vertical 2x4 mosaic" → `1440x2560`
-- **Grid/refs**: default 2×2. Pass relevant character/location refs (≤32). Warn before 3×3+; recommend smaller sheets.
+- **Grid/refs**: default 2×2. Pass relevant character/location refs up to the edit model's live cap (typically small, ~3; the CLI's error message names the real cap when exceeded). Warn before 3×3+; recommend smaller sheets.
 
 **For the canvas pre-flight, per-shot-note iteration logic, missing-anchor nudge, verbatim prompt template, and default panel coverage when no script slice exists**: see [references/storyboard-mosaic.md](references/storyboard-mosaic.md).
 

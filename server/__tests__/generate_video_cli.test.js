@@ -1,25 +1,22 @@
-// Full-path spawn tests for cli/generate_video.js (PAI async video tier).
+// Full-path spawn tests for cli/generate_video.js (deAPI async video tier).
 //
-// Cloned from generate_image_pro_cli.test.js: fake PAI server (PAI_API_BASE),
-// fake viewer HTTP server for /mutate + /preupload-asset, runCli spawn
-// helper, throwaway project under PAI_REPO_ROOT/projects (local_mirror.js
-// hardcodes that root, so PAI_PROJECTS_DIR can't redirect the CLIs).
+// Cloned from generate_image_pro_cli.test.js: fake deAPI server
+// (DEAPI_API_BASE), fake viewer HTTP server for /mutate + /preupload-asset,
+// runCli spawn helper, throwaway project under PAI_REPO_ROOT/projects
+// (local_mirror.js hardcodes that root, so PAI_PROJECTS_DIR can't redirect
+// the CLIs).
 // One deliberate upgrade over the pro harness: the fake viewer routes
 // /mutate through the real canvas_mutator, so tests can assert the node
 // actually landed in workflow.json and the staged tmp file was renamed
 // into assets/videos/<node-id>.mp4.
 //
 // The happy path passes one --ref-source-id image ref, so it exercises the
-// whole flow: ref-guard, readNodeType partition, buildProviderRefs tunnel
-// rewrite, video-generation-assets upload (CreateAssetGroup → CreateAsset →
-// GetAsset), /api/v1/submit, task-status poll (one real 5s poll interval —
-// hardcoded in pai_video_client.js), and streamUrlToTmp download.
-//
-// buildProviderRefs needs a non-empty .tunnel_url at the repo root. The
-// fake PAI server never fetches the tunnel URL, so any origin works; if the
-// file is missing (fresh clone / CI) the test writes a placeholder and
-// restores the prior state afterwards — a developer's live file is never
-// touched.
+// whole flow: ref-guard, readNodeType partition, buildProviderRefs (local
+// file path resolution — no tunnel, no preupload), multipart submit to
+// videos/animations (first_frame_image), job poll, and streamUrlToTmp
+// download. deAPI takes ref bytes as direct multipart uploads, so there is
+// no asset-preupload leg at all (unlike the old PAI video-generation-assets
+// flow).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -31,6 +28,7 @@ import http from "node:http";
 
 import { PAI_REPO_ROOT } from "../lib/paths.js";
 import { mutate, initProjectMutatorState } from "../canvas_mutator.js";
+import { makeDeapiServer } from "./helpers/deapi_cli_fake_server.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const CLI_DIR = join(__dirname, "..", "cli");
@@ -57,16 +55,12 @@ function parseReply(stdout) {
   return JSON.parse(lines[lines.length - 1]);
 }
 
-async function ensureTunnelUrl(t) {
-  const p = join(PAI_REPO_ROOT, ".tunnel_url");
-  let existing = null;
-  try { existing = await readFile(p, "utf8"); } catch { /* missing */ }
-  if (existing !== null && existing.trim()) return;
-  await writeFile(p, "http://127.0.0.1:9\n");
-  t.after(async () => {
-    if (existing === null) await rm(p, { force: true });
-    else await writeFile(p, existing);
-  });
+function deapiEnv(deapi) {
+  return {
+    DEAPI_KEY: "dpn-sk-test",
+    DEAPI_API_BASE: deapi.url,
+    DEAPI_POLL_INTERVAL_MS: "10",
+  };
 }
 
 // Seeds an image_1 node so --ref-source-id has a canvas source to resolve.
@@ -83,7 +77,7 @@ async function setupProject(t) {
     data: {
       label: "starting frame",
       local_path: "assets/images/image_1.png",
-      metadata: { source: "test" }, // no asset_id → upload leg must run
+      metadata: { source: "test" },
     },
   };
   await writeFile(
@@ -96,66 +90,6 @@ async function setupProject(t) {
   );
   t.after(() => rm(dir, { recursive: true, force: true }));
   return { projectId, dir };
-}
-
-// Serves the full async-video surface: video-generation-assets actions on
-// /api/v1/generate (dispatched on body.query_params.Action), the submit
-// endpoint, the task-status poll, and the MP4 download URL.
-// submitStatus !== 200 makes /api/v1/submit fail with that HTTP status.
-function makePaiServer({ submitStatus = 200 } = {}) {
-  const captures = { assetActions: [], submitBodies: [], statusPolls: 0 };
-  const server = http.createServer((req, res) => {
-    const respondJson = (obj, status = 200) => {
-      res.statusCode = status;
-      res.setHeader("content-type", "application/json");
-      res.end(JSON.stringify(obj));
-    };
-    if (req.method === "GET" && req.url === "/out.mp4") {
-      res.setHeader("content-type", "video/mp4");
-      res.end(MP4_BYTES);
-      return;
-    }
-    if (req.method === "GET" && req.url.startsWith("/api/v1/task/status/")) {
-      captures.statusPolls += 1;
-      const { port } = server.address();
-      respondJson({ status: "SUCCESS", output_url: `http://127.0.0.1:${port}/out.mp4` });
-      return;
-    }
-    if (req.method === "POST" && (req.url === "/api/v1/generate" || req.url === "/api/v1/submit")) {
-      let raw = "";
-      req.on("data", (chunk) => { raw += chunk; });
-      req.on("end", () => {
-        const body = raw ? JSON.parse(raw) : {};
-        if (req.url === "/api/v1/submit") {
-          captures.submitBodies.push(body);
-          if (submitStatus !== 200) {
-            respondJson({ detail: "synthetic submit rejection" }, submitStatus);
-            return;
-          }
-          respondJson({ code: 0, job_id: "task_vid_1", status: "QUEUED" });
-          return;
-        }
-        const action = body?.query_params?.Action;
-        captures.assetActions.push({ action, payload: body.payload });
-        if (action === "CreateAssetGroup") { respondJson({ Result: { Id: "group_1" } }); return; }
-        if (action === "CreateAsset") { respondJson({ Result: { Id: "asset_1" } }); return; }
-        if (action === "GetAsset") {
-          respondJson({ Result: { Id: body.payload?.Id, Status: "Active", URL: "https://cdn.example/asset" } });
-          return;
-        }
-        respondJson({ detail: `unexpected generate call: ${action}` }, 500);
-      });
-      return;
-    }
-    res.statusCode = 404;
-    res.end("not found");
-  });
-  return new Promise((resolve) => {
-    server.listen(0, "127.0.0.1", () => {
-      const { port } = server.address();
-      resolve({ server, url: `http://127.0.0.1:${port}`, captures });
-    });
-  });
 }
 
 // Fake viewer that applies /mutate envelopes through the real mutator, so
@@ -205,11 +139,10 @@ async function makeViewerServer({ dir, projectId }) {
   });
 }
 
-test("generate_video.js direct fire with image ref uploads asset and lands node + mp4", async (t) => {
-  await ensureTunnelUrl(t);
+test("generate_video.js direct fire with image ref uploads multipart and lands node + mp4", async (t) => {
   const { projectId, dir } = await setupProject(t);
-  const pai = await makePaiServer();
-  t.after(() => new Promise((resolve) => pai.server.close(resolve)));
+  const deapi = await makeDeapiServer({ resultExt: "mp4", resultBytes: MP4_BYTES, resultContentType: "video/mp4" });
+  t.after(() => new Promise((resolve) => deapi.server.close(resolve)));
   const viewer = await makeViewerServer({ dir, projectId });
   t.after(() => new Promise((resolve) => viewer.server.close(resolve)));
 
@@ -226,8 +159,7 @@ test("generate_video.js direct fire with image ref uploads asset and lands node 
     ],
     cwd: dir,
     env: {
-      PAI_KEY: "PAI_test",
-      PAI_API_BASE: pai.url,
+      ...deapiEnv(deapi),
       VIEWER_HOST: "127.0.0.1",
       VIEWER_PORT: String(viewer.port),
     },
@@ -242,44 +174,32 @@ test("generate_video.js direct fire with image ref uploads asset and lands node 
   assert.equal(reply.aspect_ratio, "16:9");
   assert.equal(reply.resolution, "720p");
   assert.equal(reply.generate_audio, true);
+  assert.equal(typeof reply.cost_usd, "number");
+  assert.equal(reply.effective_plan.route, "videos/animations");
   assert.equal(typeof reply.poll_seconds, "number");
-  assert.match(reply.provider_output_url, /^http:\/\/127\.0\.0\.1:\d+\/out\.mp4$/);
+  assert.match(reply.provider_output_url, /^http:\/\/127\.0\.0\.1:\d+\/results\/out\.mp4$/);
   assert.equal(reply.local_path, "assets/videos/video_1.mp4");
   assert.equal(reply.output_url, `/projects/${projectId}/assets/videos/video_1.mp4`);
   assert.equal(reply.canvas_mutation.node_id, "video_1");
   assert.equal(reply.canvas_mutation.version, 1);
 
-  // Asset-upload leg: group → create (tunnel-rewritten canvas URL) → poll.
-  assert.deepEqual(pai.captures.assetActions.map((a) => a.action), [
-    "CreateAssetGroup",
-    "CreateAsset",
-    "GetAsset",
-  ]);
-  const createAsset = pai.captures.assetActions[1].payload;
-  assert.equal(createAsset.GroupId, "group_1");
-  assert.equal(createAsset.AssetType, "Image");
-  assert.equal(createAsset.Name, "image_1.png");
-  assert.ok(
-    createAsset.URL.endsWith(`/projects/${projectId}/assets/images/image_1.png`),
-    `CreateAsset URL should carry the canvas path, got: ${createAsset.URL}`,
-  );
-  assert.equal(pai.captures.assetActions[2].payload.Id, "asset_1");
-
-  // Submit wire contract: text part first, then the asset:// image ref.
-  assert.equal(pai.captures.submitBodies.length, 1);
-  const submit = pai.captures.submitBodies[0];
-  assert.equal(submit.model, "video-generation");
-  assert.equal(submit.payload.model, "pai-pro-video-endpoint-01");
-  assert.deepEqual(submit.payload.content, [
-    { type: "text", text: prompt },
-    { type: "image_url", image_url: { url: "asset://asset_1" }, role: "reference_image" },
-  ]);
-  assert.equal(submit.payload.generate_audio, true);
-  assert.equal(submit.payload.ratio, "16:9");
-  assert.equal(submit.payload.duration, 8);
-  assert.equal(submit.payload.resolution, "720p");
-  assert.equal(submit.payload.watermark, false);
-  assert.ok(pai.captures.statusPolls >= 1);
+  // Ref upload: no preupload leg — deAPI takes the image bytes as direct
+  // multipart form-data on the submit call itself.
+  assert.equal(deapi.captures.submits.length, 1);
+  const submit = deapi.captures.submits[0];
+  assert.equal(submit.url, "/api/v2/videos/animations");
+  const fields = submit.form.fields;
+  assert.equal(fields.prompt, prompt);
+  assert.equal(fields.model, "Ltx2_3_22B_Dist_INT8");
+  assert.equal(fields.seed, "-1");
+  assert.equal(fields.width, "1312");
+  assert.equal(fields.height, "736");
+  assert.equal(fields.fps, "24");
+  assert.equal(fields.frames, "192");
+  assert.equal(fields.steps, "8");
+  const firstFrame = submit.form.files.find((f) => f.field === "first_frame_image");
+  assert.ok(firstFrame, "first_frame_image file field present");
+  assert.equal(firstFrame.filename, "image_1.png");
 
   // Node + ref edge landed in workflow.json via the real mutator.
   const wf = JSON.parse(await readFile(join(dir, "workflow.json"), "utf8"));
@@ -292,12 +212,13 @@ test("generate_video.js direct fire with image ref uploads asset and lands node 
   assert.equal(node.data.aspect, "16:9");
   assert.equal(node.data.shot_id, 3);
   assert.equal(node.data.local_path, "assets/videos/video_1.mp4");
-  assert.equal(node.data.metadata.source, "pai");
+  assert.equal(node.data.metadata.source, "deapi");
   assert.equal(node.data.metadata.task_type, "video_generation");
   assert.equal(node.data.metadata.model, "video-generation");
   assert.equal(node.data.metadata.resolution, "720p");
   assert.equal(node.data.metadata.generate_audio, true);
   assert.equal(node.data.metadata.provider_output_url, reply.provider_output_url);
+  assert.equal(node.data.metadata.effective_plan.route, "videos/animations");
   assert.ok(node.data.metadata.pending_job_id.startsWith("pending_"));
   assert.deepEqual(wf.edges, [{ from: "image_1", to: "video_1", kind: "derived" }]);
 
@@ -320,10 +241,13 @@ test("generate_video.js direct fire with image ref uploads asset and lands node 
   assert.deepEqual(await readdir(join(dir, ".pending")), []);
 });
 
-test("generate_video.js PAI 422 on submit exits 1 with bad_args and no retry", async (t) => {
+test("generate_video.js deAPI 422 on submit exits 1 with bad_args and no retry", async (t) => {
   const { projectId, dir } = await setupProject(t);
-  const pai = await makePaiServer({ submitStatus: 422 });
-  t.after(() => new Promise((resolve) => pai.server.close(resolve)));
+  const deapi = await makeDeapiServer({
+    submitStatus: 422,
+    submitErrorBody: { message: "synthetic submit rejection" },
+  });
+  t.after(() => new Promise((resolve) => deapi.server.close(resolve)));
   const viewer = await makeViewerServer({ dir, projectId });
   t.after(() => new Promise((resolve) => viewer.server.close(resolve)));
 
@@ -335,8 +259,7 @@ test("generate_video.js PAI 422 on submit exits 1 with bad_args and no retry", a
     ],
     cwd: dir,
     env: {
-      PAI_KEY: "PAI_test",
-      PAI_API_BASE: pai.url,
+      ...deapiEnv(deapi),
       VIEWER_HOST: "127.0.0.1",
       VIEWER_PORT: String(viewer.port),
     },
@@ -346,9 +269,9 @@ test("generate_video.js PAI 422 on submit exits 1 with bad_args and no retry", a
   const reply = parseReply(stdout);
   assert.equal(reply.ok, false);
   assert.equal(reply.klass, "bad_args");
-  assert.match(reply.message, /PAI 422: synthetic submit rejection/);
-  assert.equal(reply.limits.max_image_refs, 9);
-  assert.equal(reply.limits.max_audio_refs, 3);
+  assert.match(reply.message, /deAPI 422: synthetic submit rejection/);
+  assert.equal(reply.limits.max_image_refs, 2);
+  assert.equal(reply.limits.max_audio_refs, 1);
   assert.deepEqual(reply.sent, {
     ref_source_ids: [],
     audio_source_ids: [],
@@ -358,10 +281,10 @@ test("generate_video.js PAI 422 on submit exits 1 with bad_args and no retry", a
     resolution: "720p",
     generate_audio: true,
   });
-  // bad_args fails fast — exactly one submit attempt, no asset calls.
-  assert.equal(pai.captures.submitBodies.length, 1);
-  assert.equal(pai.captures.assetActions.length, 0);
-  assert.equal(pai.captures.statusPolls, 0);
+  // bad_args fails fast — exactly one submit attempt (no refs → videos/generations).
+  assert.equal(deapi.captures.submits.length, 1);
+  assert.equal(deapi.captures.submits[0].url, "/api/v2/videos/generations");
+  assert.equal(deapi.captures.jobPolls, 0);
 
   // No new node, no asset, no leftover tmp; failure sidecar persisted.
   const wf = JSON.parse(await readFile(join(dir, "workflow.json"), "utf8"));

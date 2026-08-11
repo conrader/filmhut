@@ -19,10 +19,23 @@ test("model registry exposes image-generation-pro without changing image default
   assert.ok(MODELS.some((m) => m.id === "image-generation-pro"));
 });
 
-test("model registry prices image pro by exact size tier", () => {
-  assert.equal(getCost("image-generation-pro", { size: "1024x1024" }), 0.26);
-  assert.equal(getCost("image-generation-pro", { size: "2560x1440" }), 0.45);
-  assert.equal(getCost("image-generation-pro", { size: "3840x2160" }), 0.77);
-  assert.equal(getCost("image-generation-pro", { size: "1920x1080" }), null);
-  assert.equal(getCost("image-generation-pro", { image_size: "2K" }), null);
+test("model registry prices image pro by tier with the edit-path floor dominating 1K/2K", () => {
+  // 1K/2K base (0.003 / 0.011) sit below the QwenImageEdit_Plus_NF4
+  // edit-path ceiling (0.035), so the floor wins on both tiers; only 4K
+  // (0.043) prices above the floor.
+  assert.equal(getCost("image-generation-pro", { size: "1024x1024" }), 0.035);
+  assert.equal(getCost("image-generation-pro", { size: "3840x2160" }), 0.043);
+});
+
+test("model registry keeps the image (standard) default on deAPI Flux1schnell", () => {
+  const img = getModel("image-generation");
+  assert.equal(img.id, "image-generation");
+  assert.equal(img.provider, "deapi");
+  assert.equal(img.deapi_slug, "Flux1schnell");
+});
+
+test("model registry points the upscale and video-generation-assets kinds at their deAPI entries", () => {
+  assert.equal(getDefault("upscale").id, "video-upscale");
+  const assets = getModel("video-generation-assets");
+  assert.equal(getCost(assets), 0);
 });

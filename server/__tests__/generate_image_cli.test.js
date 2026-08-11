@@ -1,9 +1,10 @@
 // Full-path spawn tests for cli/generate_image.js (standard image tier).
 //
-// Cloned from generate_image_pro_cli.test.js: fake PAI server (PAI_API_BASE),
-// fake viewer HTTP server for /mutate + /preupload-asset, runCli spawn
-// helper, throwaway project under PAI_REPO_ROOT/projects (local_mirror.js
-// hardcodes that root, so PAI_PROJECTS_DIR can't redirect the CLIs).
+// Cloned from generate_image_pro_cli.test.js: fake deAPI server
+// (DEAPI_API_BASE), fake viewer HTTP server for /mutate + /preupload-asset,
+// runCli spawn helper, throwaway project under PAI_REPO_ROOT/projects
+// (local_mirror.js hardcodes that root, so PAI_PROJECTS_DIR can't redirect
+// the CLIs).
 // One deliberate upgrade over the pro harness: the fake viewer routes
 // /mutate through the real canvas_mutator, so tests can assert the node
 // actually landed in workflow.json and the staged tmp file was renamed
@@ -19,6 +20,7 @@ import http from "node:http";
 
 import { PAI_REPO_ROOT } from "../lib/paths.js";
 import { mutate, initProjectMutatorState } from "../canvas_mutator.js";
+import { makeDeapiServer } from "./helpers/deapi_cli_fake_server.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const CLI_DIR = join(__dirname, "..", "cli");
@@ -44,6 +46,14 @@ function parseReply(stdout) {
   return JSON.parse(lines[lines.length - 1]);
 }
 
+function deapiEnv(deapi) {
+  return {
+    DEAPI_KEY: "dpn-sk-test",
+    DEAPI_API_BASE: deapi.url,
+    DEAPI_POLL_INTERVAL_MS: "10",
+  };
+}
+
 async function setupProject(t) {
   const projectId = `img_cli_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const dir = join(PAI_REPO_ROOT, "projects", projectId);
@@ -59,44 +69,6 @@ async function setupProject(t) {
   );
   t.after(() => rm(dir, { recursive: true, force: true }));
   return { projectId, dir };
-}
-
-// generateStatus !== 200 makes every /api/v1/generate attempt fail with that
-// HTTP status, so retry classification can be asserted deterministically.
-function makePaiServer({ generateStatus = 200 } = {}) {
-  const captures = { generateBodies: [] };
-  const server = http.createServer((req, res) => {
-    if (req.method === "POST" && req.url === "/api/v1/generate") {
-      let raw = "";
-      req.on("data", (chunk) => { raw += chunk; });
-      req.on("end", () => {
-        captures.generateBodies.push(raw ? JSON.parse(raw) : {});
-        res.setHeader("content-type", "application/json");
-        if (generateStatus !== 200) {
-          res.statusCode = generateStatus;
-          res.end(JSON.stringify({ detail: "synthetic upstream failure" }));
-          return;
-        }
-        res.end(JSON.stringify({
-          candidates: [{
-            content: {
-              parts: [{ inlineData: { mimeType: "image/png", data: PNG_BYTES.toString("base64") } }],
-            },
-            finishReason: "STOP",
-          }],
-        }));
-      });
-      return;
-    }
-    res.statusCode = 404;
-    res.end("not found");
-  });
-  return new Promise((resolve) => {
-    server.listen(0, "127.0.0.1", () => {
-      const { port } = server.address();
-      resolve({ server, url: `http://127.0.0.1:${port}`, captures });
-    });
-  });
 }
 
 // Fake viewer that applies /mutate envelopes through the real mutator, so
@@ -148,8 +120,8 @@ async function makeViewerServer({ dir, projectId }) {
 
 test("generate_image.js direct fire lands node + asset and emits one JSON line", async (t) => {
   const { projectId, dir } = await setupProject(t);
-  const pai = await makePaiServer();
-  t.after(() => new Promise((resolve) => pai.server.close(resolve)));
+  const deapi = await makeDeapiServer({ resultExt: "png", resultBytes: PNG_BYTES, resultContentType: "image/png" });
+  t.after(() => new Promise((resolve) => deapi.server.close(resolve)));
   const viewer = await makeViewerServer({ dir, projectId });
   t.after(() => new Promise((resolve) => viewer.server.close(resolve)));
 
@@ -162,8 +134,7 @@ test("generate_image.js direct fire lands node + asset and emits one JSON line",
     ],
     cwd: dir,
     env: {
-      PAI_KEY: "PAI_test",
-      PAI_API_BASE: pai.url,
+      ...deapiEnv(deapi),
       VIEWER_HOST: "127.0.0.1",
       VIEWER_PORT: String(viewer.port),
     },
@@ -176,21 +147,24 @@ test("generate_image.js direct fire lands node + asset and emits one JSON line",
   assert.equal(reply.model, "image-generation");
   assert.equal(reply.aspect_ratio, "16:9");
   assert.equal(reply.image_size, "2K");
-  assert.equal(reply.cost_usd, null);
+  assert.equal(reply.cost_usd, 0.0042);
   assert.equal(typeof reply.duration_seconds, "number");
   assert.equal(reply.local_path, "assets/images/image_1.png");
   assert.equal(reply.output_url, `/projects/${projectId}/assets/images/image_1.png`);
   assert.equal(reply.canvas_mutation.node_id, "image_1");
   assert.equal(reply.canvas_mutation.version, 1);
 
-  // Upstream wire contract.
-  assert.equal(pai.captures.generateBodies.length, 1);
-  const sent = pai.captures.generateBodies[0];
-  assert.equal(sent.model, "image-generation");
-  assert.deepEqual(sent.payload.contents[0].parts, [{ text: prompt }]);
-  assert.equal(sent.payload.generationConfig.imageConfig.aspectRatio, "16:9");
-  assert.equal(sent.payload.generationConfig.imageConfig.imageSize, "2K");
-  assert.equal(sent.payload.safetySettings.length, 4);
+  // Upstream wire contract: no refs → JSON submit to images/generations.
+  assert.equal(deapi.captures.submits.length, 1);
+  const submit = deapi.captures.submits[0];
+  assert.equal(submit.url, "/api/v2/images/generations");
+  const sent = submit.body;
+  assert.equal(sent.model, "Flux1schnell");
+  assert.equal(sent.prompt, prompt);
+  assert.equal(sent.width, 2048);
+  assert.equal(sent.height, 1152);
+  assert.equal(sent.steps, 4);
+  assert.equal(sent.seed, -1);
 
   // Node landed in workflow.json via the real mutator.
   const wf = JSON.parse(await readFile(join(dir, "workflow.json"), "utf8"));
@@ -201,7 +175,7 @@ test("generate_image.js direct fire lands node + asset and emits one JSON line",
   assert.equal(node.data.label, prompt);
   assert.equal(node.data.prompt, prompt);
   assert.equal(node.data.local_path, "assets/images/image_1.png");
-  assert.equal(node.data.metadata.source, "pai");
+  assert.equal(node.data.metadata.source, "deapi");
   assert.equal(node.data.metadata.task_type, "image_generation");
   assert.equal(node.data.metadata.model, "image-generation");
   assert.equal(node.data.metadata.aspect_ratio, "16:9");
@@ -229,10 +203,13 @@ test("generate_image.js direct fire lands node + asset and emits one JSON line",
   assert.deepEqual(await readdir(join(dir, ".pending")), []);
 });
 
-test("generate_image.js PAI 500 on every attempt exits 1 with transient_exhausted", async (t) => {
+test("generate_image.js deAPI 500 on every submit attempt exits 1 with transient_exhausted", async (t) => {
   const { projectId, dir } = await setupProject(t);
-  const pai = await makePaiServer({ generateStatus: 500 });
-  t.after(() => new Promise((resolve) => pai.server.close(resolve)));
+  const deapi = await makeDeapiServer({
+    submitStatus: 500,
+    submitErrorBody: { message: "Server Error" },
+  });
+  t.after(() => new Promise((resolve) => deapi.server.close(resolve)));
   const viewer = await makeViewerServer({ dir, projectId });
   t.after(() => new Promise((resolve) => viewer.server.close(resolve)));
 
@@ -244,8 +221,7 @@ test("generate_image.js PAI 500 on every attempt exits 1 with transient_exhauste
     ],
     cwd: dir,
     env: {
-      PAI_KEY: "PAI_test",
-      PAI_API_BASE: pai.url,
+      ...deapiEnv(deapi),
       VIEWER_HOST: "127.0.0.1",
       VIEWER_PORT: String(viewer.port),
     },
@@ -254,12 +230,12 @@ test("generate_image.js PAI 500 on every attempt exits 1 with transient_exhauste
   assert.equal(code, 1);
   const reply = parseReply(stdout);
   assert.equal(reply.ok, false);
-  // 500 → transient; the single pai_client retry also 500s → re-tagged.
+  // 500 → transient; deapi_client's built-in retry also 500s → re-tagged.
   assert.equal(reply.klass, "transient_exhausted");
   assert.match(reply.message, /after 2 attempts/);
   assert.equal(reply.limits.max_image_refs, 16);
   assert.deepEqual(reply.sent, { ref_source_ids: [], aspect_ratio: "16:9", image_size: "2K" });
-  assert.equal(pai.captures.generateBodies.length, 2);
+  assert.equal(deapi.captures.submits.length, 2);
 
   // No node, no asset, no leftover tmp; failure sidecar persisted.
   const wf = JSON.parse(await readFile(join(dir, "workflow.json"), "utf8"));

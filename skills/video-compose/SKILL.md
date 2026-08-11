@@ -27,7 +27,7 @@ node "$PAI_REPO_ROOT/server/cli/generate_video.js" --prompt "..." [--duration <s
 
 Calls go via `--stage` — see the project `PROJECT_AGENT.md` § "Draft gate".
 
-`--label` defaults to truncated prompt. Use `--ref-source-id` for image/video refs, `--ref-audio-source-id` for audio refs, and `--source-node-id` for the authoring note. Mirror external URLs first. Do not set `--shot-id` during speculative/partial generation unless user asks for a reel position; story sequences assign Timeline order after planned clips land.
+`--label` defaults to truncated prompt. Use `--ref-source-id` for image refs (they map to the clip's first frame and, with a second, its last frame), `--ref-audio-source-id` for the one allowed audio ref, and `--source-node-id` for the authoring note. Mirror external URLs first. Do not set `--shot-id` during speculative/partial generation unless user asks for a reel position; story sequences assign Timeline order after planned clips land.
 
 Match stated single-clip duration with `--duration`; omit for 15s default. Split or chain >15s totals.
 
@@ -35,7 +35,7 @@ Each clip costs real money even after staging — only stage after the user has 
 
 ## Reference caps (video-generation)
 
-≤9 image refs, ≤3 audio refs, ≤3 video refs. Audio/video refs must be **1.8s-15.2s each**; video refs also cap at **15s aggregate**. Audio refs need image/video anchor. Read durations from `workflow.json`; on failure, use returned `limits` + `sent`.
+Max **2 image refs** (first frame, and optionally a second as the clip's last frame) and max **1 audio ref** (routes the call to audio-conditioned generation). No per-ref duration windows or aggregate caps — any image/audio file works regardless of its own length. Video refs are **not supported** — a source clip can't be passed directly; extract a frame from it instead (see Reference roles below). An audio ref may be freely combined with image refs; no visual-anchor requirement is enforced. Uploaded ref files: images ≤10MB, audio ≤20MB (MP3/OGG).
 
 ## Reference roles — vocabulary
 
@@ -47,16 +47,13 @@ Prompt wording binds each ref role:
 | Location / setting | `--ref-source-id` (image) | "the location shown in @Image1" |
 | Opening frame | `--ref-source-id` (image) | "opening frame @Image1, …" |
 | Closing frame | `--ref-source-id` (image) | "closing on the frame from @Image1" |
-| Source clip — continue (next clip in a chain) | `--ref-source-id` (video) | **Default = hard cut:** "Hard cut from @Video1: open on a NEW camera angle; do not match its final frame." Same-shot ("Continue from @Video1 … maintain camera position") only for an authored held beat / oner / explicit user request — see [`references/video-extension.md`](references/video-extension.md) |
-| Source clip — transform | `--ref-source-id` (video) | "Re-render @Video1 in …" |
-| Camera-move source | `--ref-source-id` (video) | "camera moves match @Video1" |
-| Action source | `--ref-source-id` (video) | "action choreography matches @Video1" |
-| VFX template | `--ref-source-id` (video) | "use the visual-effects template from @Video1" |
 | Voice / timbre anchor | `--ref-audio-source-id` | "Use @Audio1 as voice/timbre reference. Speak once, no echo." |
+
+**No video refs.** `generate_video.js` doesn't accept a source clip directly. To continue, transform, or borrow camera/action/VFX from an existing `video_result`, extract the relevant frame(s) with `extract_frames.js`, land them as `image_result` nodes, and pass those as `--ref-source-id` (opening/closing-frame roles above). See [`references/video-extension.md`](references/video-extension.md) for continuing a clip and [`references/video-editing.md`](references/video-editing.md) for transforming one.
 
 ## Prompt-language conventions
 
-- Ref syntax: `@Image1` / `@Video1` / `@Audio1`, positional by flag order. Every `@ImageN`/`@VideoN`/`@AudioN` MUST have a matching `--ref-source-id`/`--ref-audio-source-id` flag — the CLI rejects a mismatch (`bad_args`) before generating. Mentioning the same ref many times is fine; only the highest index per kind needs a flag.
+- Ref syntax: `@Image1` / `@Audio1`, positional by flag order. Every `@ImageN`/`@AudioN` MUST have a matching `--ref-source-id`/`--ref-audio-source-id` flag — the CLI rejects a mismatch (`bad_args`) before generating. Mentioning the same ref many times is fine; only the highest index per kind needs a flag.
 - Spoken text: include script/shot/user dialogue/VO verbatim; do not summarize, translate, shorten, polish, or invent.
 - Dialogue scenes: keep the shot/script dialogue in the prompt; use one approved voice sample per speaker as a timbre anchor. Bind each quoted line to the intended character and the matching `@AudioN` reference. Do not generate per-line audio refs unless the user explicitly wants separate final audio.
 - Final audio exception: if an audio node is the approved narration/line read, use `audio_result.data.text` verbatim. If it is just a character voice sample, do not replace the shot dialogue with the sample text.
@@ -100,18 +97,18 @@ Pick the one that fits. Source lookup follows `PROJECT_AGENT.md`.
 ### 4. Extend a canvas clip
 
 **Triggers:** continue/extend/what happens after/scene follows existing `video_result`.
-**Source:** any canvas `video_result` node — agent-generated *or* user-uploaded (`data.metadata.source` is `"pai"` for generated and `"user_upload"` for dropped).
-**Call:** `node "$PAI_REPO_ROOT/server/cli/generate_video.js" --prompt "..." --ref-source-id <source_video.id>`.
-**Edges:** `{ from: <source_video.id>, to: video_<N>, kind: "derived" }`.
+**Source:** any canvas `video_result` node — agent-generated *or* user-uploaded (`data.metadata.source` is `"pai"` for generated and `"user_upload"` for dropped). No video ref exists, so extract the source clip's last frame with `extract_frames.js`, land it as an `image_result` node, and use that node as the ref.
+**Call:** `node "$PAI_REPO_ROOT/server/cli/generate_video.js" --prompt "..." --ref-source-id <extracted_frame.id>`.
+**Edges:** `{ from: <extracted_frame.id>, to: video_<N>, kind: "derived" }`.
 **Boundary defaults to a HARD CUT** (clip 2 opens on a new angle — this avoids the same-shot seam morph). If the whole sequence fits ≤15s, render ONE multi-shot clip (Pattern 7) instead of chaining. Same-shot continuation is the exception (authored held beat / story-required oner / explicit user request).
 **For the hard-cut + same-shot prefixes, the ≤15s guard, the sub-intent decision tree, and sequencing across linked calls:** see [`references/video-extension.md`](references/video-extension.md).
 
 ### 5. Edit a canvas clip
 
 **Triggers:** re-render/restyle/add/remove/swap/change/rewrite existing `video_result`. Creative edits use `generate_video.js`; ffmpeg is for mechanical ops.
-**Source:** any canvas `video_result` node — agent-generated *or* user-uploaded.
-**Call:** `node "$PAI_REPO_ROOT/server/cli/generate_video.js" --prompt "..." --ref-source-id <source_video.id>`.
-**Edges:** `{ from: <source_video.id>, to: video_<N>, kind: "derived" }`.
+**Source:** any canvas `video_result` node — agent-generated *or* user-uploaded. No video ref exists, so extract a representative frame (or opening + closing frame) with `extract_frames.js`, land it/them as `image_result` node(s), and reference those.
+**Call:** `node "$PAI_REPO_ROOT/server/cli/generate_video.js" --prompt "..." --ref-source-id <extracted_frame.id>`.
+**Edges:** `{ from: <extracted_frame.id>, to: video_<N>, kind: "derived" }`.
 **For the Restyle / Partial / Replace / Re-plot decision tree and per-mode templates:** see [`references/video-editing.md`](references/video-editing.md).
 
 ### 6. Voice-driven clip
@@ -132,7 +129,7 @@ Pick the one that fits. Source lookup follows `PROJECT_AGENT.md`.
 ### 7. Multi-shot / brand / ad / MV
 
 **Triggers:** ≥2 shots inside one render, ad/MV/brand framing, or ≥10s with multiple movements.
-**Call:** `node "$PAI_REPO_ROOT/server/cli/generate_video.js" --prompt "..." [--ref-source-id <image|video.id> ...] [--ref-audio-source-id <audio.id> ...]`.
+**Call:** `node "$PAI_REPO_ROOT/server/cli/generate_video.js" --prompt "..." [--ref-source-id <image.id> ...] [--ref-audio-source-id <audio.id>]`.
 **Edges:** as per the underlying pattern (3, 4, 5) for any refs attached.
 **For the 4-section scaffold (timeline / effects inventory / density map / energy arc) and how to populate the timeline from canvas script shot notes or storyboard mosaic panels:** see [`references/video-multi-shot.md`](references/video-multi-shot.md).
 
@@ -144,12 +141,12 @@ Cross-pattern asks route to one primary reference:
 |---|---|---|
 | Character + voice-over | (Pattern 6 inline) | character image |
 | Music video with characters | `video-multi-shot.md` | character images + audio (Pattern 6 wording) |
-| Restyle preserving identity | `video-editing.md` (Restyle) | source video + character image |
-| Multi-clip chained sequence | `video-extension.md` | source video for each link |
-| Compose with camera-move from reference | `video-single-shot.md` | character images + camera-move video ref |
+| Restyle preserving identity | `video-editing.md` (Restyle) | extracted source frame + character image |
+| Multi-clip chained sequence | `video-extension.md` | extracted last-frame of the previous clip for each link |
+| Compose with camera-move from reference | `video-single-shot.md` | character images; describe the camera move in the prompt — no video ref exists to borrow it from |
 | Render one script shot from canvas | Pattern 1, 2, or 3 by shot content (no dispatch — translate the shot note body to slot rules; preserve dialogue/VO verbatim) | character / variant refs + location / variant refs + voice anchors if the shot involves them |
-| Render a continuous script span (>15s total) as a dependent sequence | `video-extension.md` (script-driven chain; **hard-cut handoffs by default** — keep a link same-shot only for an unbroken oner the viewer must read as one motion) | source video per link + **character refs (mandatory under hard cut)** for identity |
-| Render a short script (≤15s total) as one piece | `video-multi-shot.md` (cross-skill source) | character image refs locked across shots |
+| Render a continuous script span (>15s total) as a dependent sequence | `video-extension.md` (script-driven chain; **hard-cut handoffs by default** — keep a link same-shot only for an unbroken oner the viewer must read as one motion) | extracted frame per link + **character refs (mandatory under hard cut)** for identity — both count against the 2-image-ref cap |
+| Render a short script (≤15s total) as one piece | `video-multi-shot.md` (cross-skill source) | up to 2 character/location image refs; when more anchors are needed than the cap allows, compose one reference frame first (`generate_image.js`/`generate_image_pro.js` edit, or `split_image.js`) and pass that single composite instead |
 | Render a storyboard mosaic as one 15s video (every panel becomes a shot block) | `video-multi-shot.md` (storyboard cross-skill source; required for `image_result.subtype === "storyboard"`) | mosaic image + character / location image refs that authored the mosaic |
 
 ## Sequence dispatch guidance
@@ -166,7 +163,5 @@ For draft-stage JSON, one sentence with the price/status — see the project `PR
 
 Video-specific message hints:
 
-- `asset_rejected` with *"DownloadFailed"* — `failed_url` was unreachable; swap.
-- `asset_rejected` with *"DurationTooLong"* / *"DurationTooShort"* — `failed_url`'s duration is outside 1.8s–15.2s. Swap it or trim with ffmpeg.
-- `bad_args` with *"reference_audio cannot be the only reference input"* — add an image or video ref alongside the audio.
-- `bad_args` with *"invalid video duration, exceeds 15s"* — sum of video refs breached `limits.max_total_video_sec`. Read each `video_result.data.duration` from canvas and drop refs until the sum is ≤15s.
+- `bad_args` on a 422 validation error — the message names the offending field (e.g. too many `--ref-source-id` flags, an image over 10MB, or audio not MP3/OGG); fix that field and retry.
+- Job failure carries `error_code` and `refunded`/`retryable` flags in the message — e.g. `AGE_RESTRICTED` maps to `content_filtered`. Read the message for the specific code before deciding whether to retry.

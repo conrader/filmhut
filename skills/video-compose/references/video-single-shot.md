@@ -34,7 +34,7 @@ For ordinary single-shot polish, fill:
 ## Adjacent roles
 
 - **Lip-sync:** character voice sample uses *`Use @Audio1 as the voice/timbre reference only. Speak the quoted line exactly once, no echo, no repeated reads.`* Final line audio uses *`Use @Audio1 for timing, cadence, and voice. Keep the words unchanged.`* Never `@Image1 says`; write `the character in @Image1 says`.
-- **Camera-move source:** borrow camera grammar from `@Video1` without re-rendering the source.
+- **Camera-move source:** no video ref exists to borrow it from — describe the move in concrete terms in `[Style]`/`[Shot]` instead (e.g. *"slow orbit, same speed and radius as the earlier shot"*).
 
 ## Example
 

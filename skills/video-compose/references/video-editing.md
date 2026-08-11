@@ -1,6 +1,6 @@
 # Video — editing prompt construction
 
-For transforming an existing canvas clip. Source video provides composition/motion/subject; prompt names the change.
+For transforming an existing canvas clip. **No video ref exists** — extract a representative frame (or opening + closing frame) from the source clip with `extract_frames.js`, land it as an `image_result` node, and pass it as `--ref-source-id`. That frame anchors composition/subject/look; the prompt names the change and describes any motion, since motion no longer carries over from a video ref.
 
 ## Sub-intent decision tree
 
@@ -15,41 +15,41 @@ For transforming an existing canvas clip. Source video provides composition/moti
 **Restyle:**
 
 ```
-Re-render @Video1 in [transformation]. Preserve composition, motion, and subject.
+Starting from the frame in @Image1, re-render in [transformation]. Preserve composition and subject; describe the original clip's motion so it carries over.
 ```
 
 Examples:
-- *"Re-render @Video1 in golden-hour light with warm highlights and long shadows. Preserve composition, motion, and subject."*
-- *"Re-render @Video1 as 2D anime with cel shading and bold outlines. Preserve composition, motion, and subject."*
+- *"Starting from the frame in @Image1, re-render in golden-hour light with warm highlights and long shadows. Preserve composition and subject; keep the same slow dolly-in motion."*
+- *"Starting from the frame in @Image1, re-render as 2D anime with cel shading and bold outlines. Preserve composition and subject; keep the same handheld follow motion."*
 
 **Partial edit:**
 
 ```
-Re-render @Video1 with [single change]. Keep [list of preserves] unchanged.
+Starting from the frame in @Image1, re-render with [single change]. Keep [list of preserves] unchanged, including the original motion.
 ```
 
-Example: *"Re-render @Video1 with heavy rain and overcast sky. Keep the character's position, wardrobe, and camera movement unchanged."*
+Example: *"Starting from the frame in @Image1, re-render with heavy rain and overcast sky. Keep the character's position, wardrobe, and camera movement unchanged."*
 
 **Replace:**
 
 ```
-Re-render @Video1 with [old subject/product] replaced by [new subject/product]. Preserve scene, lighting, composition.
+Starting from the frame in @Image1, re-render with [old subject/product] replaced by [new subject/product]. Preserve scene, lighting, composition, and motion.
 ```
 
-Example: *"Re-render @Video1 with the silver perfume bottle replaced by a matte-black ceramic vase. Preserve scene, lighting, composition."*
+Example: *"Starting from the frame in @Image1, re-render with the silver perfume bottle replaced by a matte-black ceramic vase. Preserve scene, lighting, composition, and motion."*
 
 **Re-plot:**
 
 ```
-Re-render @Video1 keeping the characters and environment, but [new action].
+Starting from the frame in @Image1, keep the characters and environment, but [new action].
 ```
 
-Example: *"Re-render @Video1 keeping the detective and the diner, but the detective stands and walks out instead of staying seated."*
+Example: *"Starting from the frame in @Image1, keep the detective and the diner, but the detective stands and walks out instead of staying seated."*
 
 ## Adjacent roles
 
-- **Character image ref:** attach for Restyle/Partial when identity may drift.
-- **Camera-move source:** only when user explicitly swaps camera grammar.
+- **Character image ref:** attach for Restyle/Partial when identity may drift; counts against the 2-image-ref cap alongside the extracted source frame.
+- **Camera-move source:** no video ref exists to borrow it from — name the camera move explicitly when the user swaps camera grammar.
 
 ## What to lock vs. what to change (per sub-intent)
 
@@ -69,17 +69,19 @@ Example: *"Re-render @Video1 keeping the detective and the diner, but the detect
 
 - **Output looks too different from source** — over-described; the prompt is doing redescribe instead of transform. Reduce the prompt to the change clause + preserves clause.
 - **Output looks identical to source** — under-described; the change clause is too vague. Be specific about *what* changes.
-- **Identity drift in Restyle / Partial** — attach a character image ref; the source video alone may not be enough to lock identity through a style change.
+- **Identity drift in Restyle / Partial** — attach a character image ref; the extracted frame alone may not be enough to lock identity through a style change.
 
 ## Worked example — Restyle
 
 User: *"Re-render the detective interrogation clip in golden-hour light."*
 
+Extract the source clip's key frame, land it as `frame_1`, then:
+
 ```
-Re-render @Video1 in warm golden-hour light, with low-angle sun streaming through the blinds and long shadows across the desk. Preserve composition, motion, and subject.
+Starting from the frame in @Image1, re-render in warm golden-hour light, with low-angle sun streaming through the blinds and long shadows across the desk. Preserve composition and subject; keep the same slow push-in motion.
 ```
 
-Adjacent ref attached: `--ref-source-id <detective.id>` — locks the detective's face through the regrade.
+Call: `--ref-source-id <frame_1.id>`. Only one more image-ref slot remains — use it for a character ref (`--ref-source-id <detective.id>`) only if identity is at risk of drifting through the regrade.
 
 ## Fallback branch
 
