@@ -10,52 +10,93 @@ Canvas · timeline · agent terminal — with every media capability served by [
 
 ---
 
-## What this is
+# 🔑 Setup: get your API key
 
-filmhut is a private derivative of [**Utopai-Research/pai-pro**](https://github.com/Utopai-Research/pai-pro). The canvas, timeline, project model, embedded agent terminal, and filmmaking skills are upstream's work. The change here is the **compute supplier**: every image, video, voice, music, and upscale call now goes to deAPI's open-model fleet rather than the PAI hosted service.
+**filmhut ships with no API key. You bring your own.** It takes about two minutes, and new accounts get **$5 free** — enough for roughly 90 ten-second clips or several hundred images.
 
-The upstream README is preserved verbatim at [`docs/UPSTREAM_README.md`](docs/UPSTREAM_README.md).
+### Step 1 — Create a deAPI account
 
-**Why swap it.** deAPI runs open models (FLUX, LTX-2, Qwen, Whisper, AceStep) on a decentralised GPU network, priced per task. For this workload it lands roughly 10–30× cheaper than the hosted alternative, and every model is selectable — you are not locked to one vendor's opinion of "the video model". The trade is a smaller reference budget and a lower resolution ceiling; both are documented honestly below.
+Go to **[app.deapi.ai](https://app.deapi.ai)** and sign up. The $5 credit is applied automatically.
 
-> **Licence:** upstream ships under the PAI PRO Sustainable Use License — *not* open source. It permits internal business, research, and personal use, and **forbids commercial use and commercial derivative works**, singling out the Skills. That is why this repo is private. See [LICENSE.md](LICENSE.md); the Utopai Studios notices must stay intact.
+### Step 2 — Create the key
 
----
+Open **[Dashboard → API keys](https://app.deapi.ai/dashboard/api-keys)** and click **Create key**.
 
-## Get your deAPI key
+Your key looks like this — an id, a pipe character, then the secret:
 
-You bring your own key — **no key ships with this repo**, and none ever should.
+```
+12345|AbCdEf0123456789abcdef0123456789abcdef01
+```
 
-1. Sign up at **[app.deapi.ai](https://app.deapi.ai)**. New accounts get **$5 in free credits**, which is enough for roughly 90 ten-second clips or several hundred images.
-2. Go to **[Dashboard → API keys](https://app.deapi.ai/dashboard/api-keys)** and create a key. It looks like `12345|AbCdEf0123…` — an id, a pipe, then the secret.
-3. Copy it now: deAPI shows the secret **once**.
-4. Put it in your local `.env`:
+⚠️ **Copy it right away.** deAPI shows the secret **only once**. If you lose it, delete the key and make a new one.
+
+### Step 3 — Put it in `.env`
 
 ```bash
 cp .env.example .env
 ```
 
-```bash
-# .env  — QUOTE THE VALUE
-DEAPI_KEY='12345|AbCdEf0123…'
-```
-
-> **The quotes are load-bearing.** deAPI keys contain a `|`, and `scripts/start.sh` sources `.env` as a shell file — unquoted, the shell reads that pipe as a pipeline and the boot dies with `command not found`. Single quotes fix it, and the dotenv parser strips them, so both readers agree.
-
-`.env` is in `.gitignore` and must stay there. Never commit a key, never paste one into an issue, and if one leaks, revoke it in the dashboard immediately — it is a live billing credential. Top up or watch spend on the same dashboard.
-
-## Quick start
+Open `.env` and set your key — **with quotes around it**:
 
 ```bash
-node scripts/deapi-doctor.mjs # free preflight: key, balance, models, live prices
-./scripts/start.sh            # http://localhost:7443
+DEAPI_KEY='12345|AbCdEf0123456789abcdef0123456789abcdef01'
 ```
 
-`deapi-doctor.mjs` costs nothing and tells you immediately whether the key works, what it can see, and what a call will cost. Run it before anything else.
+> ### ⚠️ The quotes are required
+> deAPI keys contain a `|`. `scripts/start.sh` reads `.env` as a shell file, and **unquoted, the shell treats that pipe as a command** — the app dies at boot with a confusing `command not found`.
+>
+> ✅ `DEAPI_KEY='12345|AbCdEf…'` &nbsp;&nbsp; ❌ `DEAPI_KEY=12345|AbCdEf…`
 
-**No tunnel required.** Upstream needed a Cloudflare tunnel so the provider could fetch reference files over a public URL. deAPI takes references as direct multipart uploads, so generation works with no tunnel at all.
+### Step 4 — Check it works (free)
 
-**Reaching it from another machine:** `PAI_BIND_HOST=100.x.y.z ./scripts/start.sh` binds the viewer and web UI to that address (e.g. a Tailscale IP). It defaults to `127.0.0.1` on purpose — **the viewer's routes are unauthenticated and its terminal spawns an agent with permission prompts bypassed**, so never bind `0.0.0.0` on a box with a public IP.
+```bash
+node scripts/deapi-doctor.mjs
+```
+
+This costs nothing. It confirms your key authenticates, prints your balance, lists the models your account can actually see, checks each configured model supports the job it will be given, and quotes live prices. **If something is wrong later, run this first.**
+
+```
+✓ key authenticates — balance $5.0000
+✓ catalog reachable — 25 models visible to this key
+✓ Flux1schnell — text-to-image
+✓ Ltx2_3_22B_Dist_INT8 — text-to-video
+✓ preflight clean — the media CLIs should work against this account.
+```
+
+### Step 5 — Start it
+
+```bash
+./scripts/start.sh          # then open http://localhost:7443
+```
+
+### Keeping the key safe
+
+- `.env` is listed in `.gitignore` — **leave it there**. Never commit it.
+- Never paste a key into an issue, a PR, or a screenshot.
+- A key is a **live billing credential**. If one leaks, revoke it in the dashboard immediately.
+- Top up and watch spend at [app.deapi.ai/dashboard](https://app.deapi.ai/dashboard).
+
+### If it doesn't work
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `command not found` at boot | key not quoted in `.env` | wrap the value in `'single quotes'` |
+| `DEAPI_KEY not set in env` | no `.env`, or the line is blank | `cp .env.example .env` and fill it in |
+| `deAPI 401 (auth): Unauthenticated` | key wrong, revoked, or partly copied | make a fresh key; copy the **whole** string including the `12345|` prefix |
+| `deAPI 402` / balance $0 | out of credit | top up on the dashboard |
+| `model "X" not in this account's catalog` | that model isn't on your account | run `deapi-doctor.mjs` to see yours, then set the matching `DEAPI_*_MODEL` in `.env` |
+
+---
+
+## What this is
+
+filmhut is a derivative of [**Utopai-Research/pai-pro**](https://github.com/Utopai-Research/pai-pro). The canvas, timeline, project model, embedded agent terminal, and filmmaking skills are upstream's work. The change here is the **compute supplier**: every image, video, voice, music, and upscale call now goes to deAPI's open-model fleet rather than the PAI hosted service.
+
+The upstream README is preserved verbatim at [`docs/UPSTREAM_README.md`](docs/UPSTREAM_README.md).
+
+**Why swap it.** deAPI runs open models (FLUX, LTX-2, Qwen, Whisper, AceStep) on a decentralised GPU network, priced per task. For this workload it lands roughly 10–30× cheaper than the hosted alternative, and every model is selectable — you are not locked to one vendor's opinion of "the video model". The trade is a smaller reference budget and a lower resolution ceiling; both are documented honestly below.
+
+> **Licence:** upstream ships under the PAI PRO Sustainable Use License — *not* open source. It permits internal business, research, and personal use, and **forbids commercial use and commercial derivative works**, singling out the Skills. Distributing it publicly free of charge for non-commercial use is permitted; selling it or building a commercial product on it is not. See [LICENSE.md](LICENSE.md); the Utopai Studios notices must stay intact.
 
 ---
 
