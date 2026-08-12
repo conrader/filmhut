@@ -105,7 +105,8 @@ const audioResultDataSchema = {
   properties: {
     subtype: {
       type: "string",
-      enum: ["voice", "upload"],
+      // music: a bed the timeline sits on, not a per-shot asset.
+      enum: ["voice", "upload", "music"],
     },
     label: { type: "string" },
     local_path: { type: "string", minLength: 1 },
@@ -133,6 +134,12 @@ const videoResultDataSchema = {
     duration: { type: "integer" },
     aspect: { type: "string" },
     shot_id: { type: ["integer", "null"] },
+    // Trim window into the source. A clip is a VIEW of its file, not the whole
+    // of it — this is what lets a ten-second generation that is good for six
+    // seconds be cut rather than regenerated at full price. Null means the
+    // natural boundary. See server/lib/trim.js for how a cut is honoured.
+    in_s: { type: ["number", "null"], minimum: 0 },
+    out_s: { type: ["number", "null"], minimum: 0 },
     state: { type: "string" },
     archived: { type: "boolean" },
     metadata: { $ref: "#metadata" },

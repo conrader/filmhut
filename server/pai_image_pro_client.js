@@ -138,6 +138,7 @@ export async function generateImagePro({
   size = IMAGE_PRO_DEFAULT_SIZE,
   outputFormat = "png",
   refImagePaths = [],
+  onSubmitted,
 } = {}) {
   const promptText = validatePrompt(prompt);
   const sizeInfo = validateSize(size);
@@ -195,6 +196,12 @@ export async function generateImagePro({
     });
     requestId = requestIdOf(submitted, "images/edits");
   }
+
+  // The supplier has the job and the money is committed. Report the id
+
+  // before polling so a caller can make it durable (see cli/_resume.js).
+
+  if (typeof onSubmitted === "function") { try { onSubmitted(requestId); } catch { /* never let bookkeeping fail a paid job */ } }
 
   const job = await pollJob(requestId, {
     timeoutMs: POLL_TIMEOUT_MS,

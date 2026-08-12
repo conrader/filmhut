@@ -9,6 +9,7 @@ import { mkdtemp, rm, writeFile, stat, mkdir, copyFile, access, rename, unlink }
 import { tmpdir } from "os";
 import path from "path";
 import crypto from "crypto";
+import { buildConcatList, buildTrimFilter, planTrims } from "./lib/trim.js";
 
 export function selectReel(state) {
   return (state?.nodes || [])
@@ -104,11 +105,7 @@ export async function stitchReel(state, projectDir, slug = "local") {
     }
 
     const listPath = path.join(dir, "list.txt");
-    await writeFile(
-      listPath,
-      files.map((f) => `file '${f.replace(/'/g, "'\\''")}'`).join("\n"),
-      "utf8"
-    );
+    await writeFile(listPath, buildConcatList(plan.clips), "utf8");
 
     const outPath = path.join(dir, "out.mp4");
 
@@ -119,16 +116,20 @@ export async function stitchReel(state, projectDir, slug = "local") {
     // routine here: audio-synced dialogue clips come back at 24kHz while
     // plain generated clips are 48kHz, so any reel mixing the two was
     // affected. Probe first and force the re-encode path when they disagree.
-    const audioRates = new Set();
-    for (const f of files) {
-      const rate = await probeAudioSampleRate(f);
-      if (rate) audioRates.add(rate);
-    }
-    const uniformAudio = audioRates.size <= 1;
-    if (!uniformAudio) {
-      console.warn(
-        `[stitch ${slug}] clips differ in audio sample rate (${[...audioRates].join(", ")}Hz) — re-encoding instead of stream copy`,
-      );
+    // planTrims subsumes the old sample-rate probe and adds the check that
+    // whole-clip concat never needed: whether a requested cut lands on a
+    // keyframe. Stream copy cannot cut mid-GOP, so a trim that does not align
+    // must re-encode or it silently ships the wrong footage.
+    const plan = await planTrims(
+      files.map((f, i) => ({
+        path: f,
+        in_s: reel[i]?.data?.in_s ?? null,
+        out_s: reel[i]?.data?.out_s ?? null,
+      })),
+    );
+    const uniformAudio = plan.mode === "copy";
+    if (plan.mode !== "copy") {
+      console.warn(`[stitch ${slug}] re-encoding: ${plan.reasons.join("; ")}`);
     }
 
     try {
@@ -153,9 +154,10 @@ export async function stitchReel(state, projectDir, slug = "local") {
       // carry audio (generate_audio defaults on), so a plain [i:a:0] is safe;
       // a clip with no audio track would need a probe + anullsrc silence pad
       // (not handled here — see docs handover).
-      const filter = files
-        .map((_, i) => `[${i}:v:0][${i}:a:0]`)
-        .join("") + `concat=n=${files.length}:v=1:a=1[outv][outa]`;
+      // buildTrimFilter applies the same windows the copy path would have,
+      // and generates silence for any clip without an audio track — the case
+      // the previous hand-rolled graph explicitly could not handle.
+      const filter = buildTrimFilter(plan.clips);
       await runFfmpeg([
         "-y",
         ...inputs,
@@ -256,14 +258,24 @@ export async function buildReelMaster(state, projectDir, outPath, slug = "local"
     const files = [];
     for (const n of reel) files.push(await resolveClipFile(n, projectDir));
 
-    const listPath = path.join(workDir, "list.txt");
-    await writeFile(
-      listPath,
-      files.map((f) => `file '${f.replace(/'/g, "'\\''")}'`).join("\n"),
-      "utf8",
+    // Plan before choosing a path: a trim that does not land on a keyframe
+    // cannot be stream-copied without silently moving the cut, so the planner
+    // decides and the reasons are logged rather than guessed at.
+    const plan = await planTrims(
+      files.map((f, i) => ({
+        path: f,
+        in_s: reel[i]?.data?.in_s ?? null,
+        out_s: reel[i]?.data?.out_s ?? null,
+      })),
     );
 
+    const listPath = path.join(workDir, "list.txt");
+    await writeFile(listPath, buildConcatList(plan.clips), "utf8");
+
     try {
+      if (plan.mode !== "copy") {
+        throw new Error(plan.reasons.join("; ") || "re-encode required");
+      }
       await runFfmpeg([
         "-y",
         "-f", "concat",
@@ -288,9 +300,10 @@ export async function buildReelMaster(state, projectDir, outPath, slug = "local"
       // carry audio (generate_audio defaults on), so a plain [i:a:0] is safe;
       // a clip with no audio track would need a probe + anullsrc silence pad
       // (not handled here — see docs handover).
-      const filter = files
-        .map((_, i) => `[${i}:v:0][${i}:a:0]`)
-        .join("") + `concat=n=${files.length}:v=1:a=1[outv][outa]`;
+      // Same windows the copy path would have applied, plus generated silence
+      // for any clip without an audio track — the case the previous graph
+      // explicitly could not handle.
+      const filter = buildTrimFilter(plan.clips);
       await runFfmpeg([
         "-y",
         ...inputs,

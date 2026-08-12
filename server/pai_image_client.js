@@ -93,7 +93,7 @@ async function quoteOrNull(quote) {
  * @throws  classified Error (.klass): bad_args / content_filtered /
  *          rate_limited / infra / transient / transient_exhausted
  */
-export async function generateImage({ prompt, aspectRatio, imageSize, refImagePaths } = {}) {
+export async function generateImage({ prompt, aspectRatio, imageSize, refImagePaths , onSubmitted} = {}) {
   if (typeof prompt !== "string" || !prompt.trim()) {
     throw err("bad_args", "generateImage: prompt required");
   }
@@ -155,6 +155,12 @@ export async function generateImage({ prompt, aspectRatio, imageSize, refImagePa
     });
     requestId = requestIdOf(submitted, "images/edits");
   }
+
+  // The supplier has the job and the money is committed. Report the id
+
+  // before polling so a caller can make it durable (see cli/_resume.js).
+
+  if (typeof onSubmitted === "function") { try { onSubmitted(requestId); } catch { /* never let bookkeeping fail a paid job */ } }
 
   const job = await pollJob(requestId, {
     timeoutMs: POLL_TIMEOUT_MS,

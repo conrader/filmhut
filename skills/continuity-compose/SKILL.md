@@ -95,7 +95,11 @@ Run after PROJECT_AGENT.md § "Prompt alignment check" returns `pass`, and befor
 depends on this clip's outgoing state.
 
 1. **Look.** Extract frames with `node "$PAI_REPO_ROOT/server/cli/extract_frames.js" --path <local_path>`
-   and view the opening, the middle, and the ending in order.
+   and view the opening, the middle, and the ending in order. For a cheap first
+   pass, `node "$PAI_REPO_ROOT/server/cli/check_continuity.js" --path <local_path> --ref <anchor>`
+   scores palette, exposure, and composition against the anchors for free. It
+   reports `identity_checked: false`: a passing score is not evidence the
+   character is the same person, and you still have to look.
 2. **Describe, then judge.** Write two or three factual sentences about what the clip shows before
    re-reading the contract. Reading the contract first primes you to see what you promised.
 3. **Compare side by side.** Open the anchor images and the neighbouring clips' boundary frames.
