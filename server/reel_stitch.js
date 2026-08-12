@@ -40,6 +40,28 @@ const H264_WEB_SAFE = [
   "-c:a", "aac",
 ];
 
+// Read a file's audio sample rate. Returns null when ffprobe is missing,
+// the file has no audio, or anything else goes wrong — callers treat null
+// as "unknown" and fall back to the safe (re-encoding) path.
+function probeAudioSampleRate(file) {
+  return new Promise((resolve) => {
+    const p = spawn("ffprobe", [
+      "-v", "error",
+      "-select_streams", "a:0",
+      "-show_entries", "stream=sample_rate",
+      "-of", "default=noprint_wrappers=1:nokey=1",
+      file,
+    ], { stdio: ["ignore", "pipe", "ignore"] });
+    let out = "";
+    p.stdout.on("data", (b) => { out += b.toString(); });
+    p.on("error", () => resolve(null));
+    p.on("close", () => {
+      const n = parseInt(out.trim(), 10);
+      resolve(Number.isFinite(n) ? n : null);
+    });
+  });
+}
+
 function runFfmpeg(args) {
   return new Promise((resolve, reject) => {
     const p = spawn("ffmpeg", args, { stdio: ["ignore", "ignore", "pipe"] });
@@ -90,7 +112,27 @@ export async function stitchReel(state, projectDir, slug = "local") {
 
     const outPath = path.join(dir, "out.mp4");
 
+    // The concat demuxer builds ONE audio decoder from the first file and
+    // reuses it for the rest, so clips that differ in sample rate decode to
+    // garbage — and it does that WITHOUT failing, so the copy path below
+    // "succeeds" and silently ships a corrupt track. That combination is
+    // routine here: audio-synced dialogue clips come back at 24kHz while
+    // plain generated clips are 48kHz, so any reel mixing the two was
+    // affected. Probe first and force the re-encode path when they disagree.
+    const audioRates = new Set();
+    for (const f of files) {
+      const rate = await probeAudioSampleRate(f);
+      if (rate) audioRates.add(rate);
+    }
+    const uniformAudio = audioRates.size <= 1;
+    if (!uniformAudio) {
+      console.warn(
+        `[stitch ${slug}] clips differ in audio sample rate (${[...audioRates].join(", ")}Hz) — re-encoding instead of stream copy`,
+      );
+    }
+
     try {
+      if (!uniformAudio) throw new Error("mixed audio sample rates");
       await runFfmpeg([
         "-y",
         "-f", "concat",
