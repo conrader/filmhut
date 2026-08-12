@@ -105,7 +105,8 @@ const audioResultDataSchema = {
   properties: {
     subtype: {
       type: "string",
-      enum: ["voice", "upload"],
+      // music: a bed the timeline sits on, not a per-shot asset.
+      enum: ["voice", "upload", "music"],
     },
     label: { type: "string" },
     local_path: { type: "string", minLength: 1 },

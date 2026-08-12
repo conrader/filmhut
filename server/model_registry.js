@@ -202,6 +202,33 @@ export const MODELS = [
     notes: "Async TTS via deAPI. voice_design mode: --prompt is the voice brief. Min 10 chars of text. ~5-30s.",
   },
 
+  // ───────────── music ─────────────
+  {
+    id: "music-generation",
+    provider: "deapi",
+    kind: "music",
+    deapi_slug: envSlug("DEAPI_MUSIC_MODEL", "AceStep_1_5_Turbo"),
+    label: "Music (deAPI AceStep)",
+    cost_approx_usd: null, // quoted exactly via audio/music/price
+    capabilities: ["music-generation"],
+    default_params: {},
+    notes: "Async music via deAPI. 10-300s in one call. guidance_scale must be <= 1 on AceStep.",
+  },
+
+  // ───────────── transcription ─────────────
+  {
+    id: "transcription",
+    provider: "deapi",
+    kind: "transcription",
+    deapi_slug: envSlug("DEAPI_TRANSCRIBE_MODEL", "WhisperLargeV3Ct2"),
+    label: "Transcription (deAPI Whisper)",
+    cost_approx_usd: null, // priced by audio duration, quoted per call
+    capabilities: ["transcription", "diarization"],
+    default_params: {},
+    hidden: true, // consumes an asset rather than producing a canvas card
+    notes: "Async speech-to-text via deAPI. Timestamps + optional diarization. Input side of the pipeline.",
+  },
+
   // ───────────── video upscale ─────────────
   {
     id: "video-upscale",
