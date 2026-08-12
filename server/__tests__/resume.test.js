@@ -174,3 +174,82 @@ test("no CLI deletes a pending sidecar on the way out any more", async () => {
     assert.match(src, /recordProviderRef/, `${file} must make the provider id durable`);
   }
 });
+
+// The boot path. resume.test.js's other tests only exercise cli/_resume.js in a
+// temp dir — they never touched recoverPendingResults(), which runs on EVERY
+// viewer start (and under `node --watch`, on every file save). That is where
+// the recovery data was being destroyed.
+
+test("viewer boot leaves a paid job alone instead of burying it", async () => {
+  const { recoverPendingResults } = await import("../services/projects.js");
+  const { pendingDir, projectDir } = await import("../lib/paths.js");
+
+  const projectId = `resume-test-${Date.now()}`;
+  const dir = pendingDir(projectId);
+  await fsp.mkdir(dir, { recursive: true });
+
+  // Exactly what markResumableSync() leaves behind after a real SIGTERM.
+  const jobId = "pending_paid";
+  await fsp.writeFile(path.join(dir, `${jobId}.json`), JSON.stringify({
+    id: jobId, kind: "video", stage: "running", prompt: "a lighthouse",
+    provider_ref: "req_already_paid", resumable: true,
+    created_at: new Date().toISOString(),
+  }));
+
+  try {
+    await recoverPendingResults(projectId);
+
+    const stillThere = fs.existsSync(path.join(dir, `${jobId}.json`));
+    assert.equal(stillThere, true, "a restart must not delete a job the supplier already took money for");
+
+    const after = JSON.parse(await fsp.readFile(path.join(dir, `${jobId}.json`), "utf8"));
+    assert.equal(after.provider_ref, "req_already_paid", "the only id that can collect the work must survive");
+
+    assert.equal(listResumable(projectDir(projectId)).length, 1, "and it must still be collectable");
+  } finally {
+    await fsp.rm(projectDir(projectId), { recursive: true, force: true });
+  }
+});
+
+test("viewer boot still buries a job that never reached the supplier", async () => {
+  const { recoverPendingResults } = await import("../services/projects.js");
+  const { pendingDir, projectDir } = await import("../lib/paths.js");
+
+  const projectId = `resume-test-dead-${Date.now()}`;
+  const dir = pendingDir(projectId);
+  await fsp.mkdir(dir, { recursive: true });
+  const jobId = "pending_never_sent";
+  await fsp.writeFile(path.join(dir, `${jobId}.json`), JSON.stringify({
+    id: jobId, kind: "image", stage: "running", prompt: "x",
+    created_at: new Date().toISOString(),
+  }));
+
+  try {
+    await recoverPendingResults(projectId);
+    // Nothing is owed for this one, so the old behaviour is still correct.
+    assert.equal(fs.existsSync(path.join(dir, `${jobId}.json`)), false);
+  } finally {
+    await fsp.rm(projectDir(projectId), { recursive: true, force: true });
+  }
+});
+
+test("a SIGKILLed job becomes recoverable once no live poller could own it", async () => {
+  const cwd = await project();
+  stageJob(cwd, "killed_hard");
+  recordProviderRef("killed_hard", "req_kill", cwd);
+  // No markResumableSync — SIGKILL runs no handler at all, so the flag that
+  // normally marks a job collectable was never written.
+
+  // While it could still belong to a live poller, it is left alone: two
+  // pollers on one job is worse than collecting it a little later.
+  assert.equal(listResumable(cwd).length, 0, "a fresh running job may still have an owner");
+
+  // Age it past the longest poll in the repo. Now nothing can be holding it.
+  const file = path.join(cwd, ".pending", "killed_hard.json");
+  const old = Date.now() - 60 * 60 * 1000;
+  fs.utimesSync(file, new Date(old), new Date(old));
+
+  const found = listResumable(cwd);
+  assert.equal(found.length, 1, "the reference is on disk; the flag was only ever a nicety");
+  assert.equal(found[0].provider_ref, "req_kill");
+});

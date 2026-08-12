@@ -241,6 +241,22 @@ export async function recoverPendingResults(id) {
     }
     if (pending?.stage !== "running") continue;
 
+    // A job the supplier has already accepted is NOT dead just because this
+    // process restarted — and under `node --watch` that happens on every file
+    // save. Writing an aborted result here and unlinking the sidecar would
+    // destroy the provider reference, which is the only thing that can still
+    // identify work the user has already paid for. Leave it for the resume
+    // sweep (cli/_resume.js, server/cli/resume_jobs.js).
+    //
+    // No resumable flag is required: a SIGKILL leaves the reference on disk
+    // with no chance to set one, and that job is just as recoverable.
+    if (typeof pending.provider_ref === "string" && pending.provider_ref !== "") {
+      console.warn(
+        `[viewer] leaving paid job ${id}/${jobId} for recovery (provider_ref ${pending.provider_ref})`,
+      );
+      continue;
+    }
+
     const existing = await readResultEntry(id, jobId);
     if (!existing) {
       await writeResult(id, jobId, {

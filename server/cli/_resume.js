@@ -105,6 +105,17 @@ export function markResumableSync(jobId, cwd = process.cwd()) {
   }
 }
 
+/** Longer than the longest poll in the repo (video, 40 min), so a live job is never stolen. */
+const STALE_AFTER_MS = 45 * 60 * 1000;
+
+function isStale(fileName, cwd, now = Date.now()) {
+  try {
+    return now - fs.statSync(path.join(pendingDir(cwd), fileName)).mtimeMs > STALE_AFTER_MS;
+  } catch {
+    return false;
+  }
+}
+
 /** Jobs left behind by a process that died holding them. */
 export function listResumable(cwd = process.cwd()) {
   let names = [];
@@ -117,7 +128,23 @@ export function listResumable(cwd = process.cwd()) {
   for (const name of names) {
     if (!name.endsWith(".json")) continue;
     const sidecar = readSidecarSync(name.slice(0, -5), cwd);
-    if (sidecar?.resumable && sidecar?.provider_ref) out.push(sidecar);
+    if (!sidecar?.provider_ref) continue;
+
+    // Two ways a job becomes ours to collect.
+    //
+    // The tidy one: a signal handler ran and set `resumable`.
+    //
+    // The untidy one: SIGKILL, an OOM kill, or a power cut left no flag at
+    // all. The reference is still on disk and the job is just as collectable —
+    // and these are precisely the failures least likely to have been tidy, so
+    // ignoring them would miss the cases that matter most.
+    //
+    // But a `running` sidecar might also belong to a process that is polling
+    // it RIGHT NOW, and stealing that would mean two pollers on one job. Age
+    // separates them: the longest poll this repo runs is 40 minutes (video),
+    // so anything untouched for longer than that has no live owner.
+    if (sidecar.resumable === true) { out.push(sidecar); continue; }
+    if (sidecar.stage === "running" && isStale(name, cwd)) out.push(sidecar);
   }
   return out.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
 }

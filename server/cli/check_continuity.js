@@ -113,7 +113,10 @@ try {
   });
 } catch (e) {
   emitFailure(e?.message?.includes("ffmpeg") ? "infra" : "bad_args", e?.message ?? String(e));
-  process.exit(1);
+  // exitCode rather than exit(): process.exit() terminates immediately and the
+  // finally below never runs, so a failed check used to leave its extracted
+  // frames behind in the project's asset directory.
+  process.exitCode = 1;
 } finally {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 }
