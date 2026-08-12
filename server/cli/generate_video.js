@@ -316,8 +316,12 @@ try {
   // ≈ 10s on the default model). The canvas node must carry the REAL
   // length or the timeline sequences shots against a duration the file
   // doesn't have.
-  const effectiveDuration = Number(effective?.effectiveDurationSec) || durationInt;
-  const durationClamped = Math.abs(effectiveDuration - durationInt) > 0.25;
+  const effectiveDurationExact = Number(effective?.effectiveDurationSec) || durationInt;
+  // The node schema requires an integer duration, and a clamped clip lands
+  // on a fraction (241 frames / 24fps = 10.04). Round for the node; the
+  // exact value stays in effective_plan.
+  const effectiveDuration = Math.max(1, Math.round(effectiveDurationExact));
+  const durationClamped = Math.abs(effectiveDurationExact - durationInt) > 0.25;
   const data = {
     label: args.label || truncateLabel(args.prompt),
     prompt: args.prompt,
@@ -386,7 +390,7 @@ try {
     duration: effectiveDuration,
     ...(durationClamped ? {
       requested_duration: durationInt,
-      note: `duration clamped to ${effectiveDuration}s — ${effective.model} allows at most `
+      note: `duration clamped to ${effectiveDurationExact}s — ${effective.model} allows at most `
         + `${effective.frames} frames at ${effective.fps}fps. Chain clips for longer sequences.`,
     } : {}),
     aspect_ratio: args["aspect-ratio"],

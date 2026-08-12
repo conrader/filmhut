@@ -9,6 +9,12 @@ node_modules/
 # Local project state (per-project runtime data; one folder per project)
 workflow.json
 projects/
+
+# Runtime generation state: in-flight draft sidecars (.pending) and
+# durable per-job result sidecars (.results). Local job bookkeeping, not
+# source — same reasoning as projects/.
+.pending/
+.results/
 .active_project
 
 # Build output

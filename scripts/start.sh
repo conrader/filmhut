@@ -88,7 +88,10 @@ print_banner() {
 preflight_tools() {
     ensure_tool node
     ensure_tool tmux
-    ensure_tool cloudflared
+    # cloudflared is NOT required: deAPI receives media refs as direct
+    # multipart uploads, so generation never needs a public URL. The
+    # tunnel is opt-in convenience for sharing the viewer — ensure_tunnel
+    # skips it when the binary is absent.
     ensure_tool pdftotext poppler
 }
 
@@ -182,13 +185,20 @@ load_env() {
             echo "ERROR: DEAPI_KEY still empty; aborting."
             exit 1
         fi
-        # Replace the existing DEAPI_KEY= line in place (sed -i.bak then rm
-        # the .bak — portable across BSD/macOS sed and GNU/Linux sed).
-        # Both parsers (bash source + dotenv pkg) honor last-occurrence,
-        # but in-place replacement keeps .env clean for users who later
-        # edit it manually.
-        sed -i.bak "s|^DEAPI_KEY=.*|DEAPI_KEY=$DEAPI_KEY|" "$PAI_REPO_ROOT/.env" && \
-            rm -f "$PAI_REPO_ROOT/.env.bak"
+        # Rewrite the DEAPI_KEY line. NOT with sed: deAPI keys are Laravel
+        # tokens shaped `<id>|<secret>`, and the pipe collides with sed's
+        # delimiter (and with any other delimiter the secret might contain).
+        # Drop the old line and append a fresh single-quoted one instead.
+        #
+        # The quotes are load-bearing: this file is `.`-sourced by bash a
+        # few lines above, so an unquoted `|` would be parsed as a pipeline
+        # and the boot would die with "command not found". The dotenv
+        # package strips the quotes, so both readers agree.
+        local env_tmp="$PAI_REPO_ROOT/.env.tmp.$$"
+        grep -v '^DEAPI_KEY=' "$PAI_REPO_ROOT/.env" > "$env_tmp" || true
+        printf "DEAPI_KEY='%s'\n" "$DEAPI_KEY" >> "$env_tmp"
+        mv "$env_tmp" "$PAI_REPO_ROOT/.env"
+        chmod 600 "$PAI_REPO_ROOT/.env"
         export DEAPI_KEY
         echo "Saved to .env. Continuing boot."
         echo ""
@@ -216,8 +226,26 @@ derive_config() {
             ;;
     esac
     export VIEWER_PORT WEB_PORT PAI_DEFAULT_AGENT_ID
-    export WEB_ORIGIN="http://localhost:${WEB_PORT}"
-    export VITE_VIEWER_URL="http://localhost:${VIEWER_PORT}"
+
+    # PAI_BIND_HOST controls which interface the viewer and Vite listen on,
+    # and the origin the browser is told to use. Default 127.0.0.1: the
+    # viewer's routes are UNAUTHENTICATED and its terminal spawns an agent
+    # with permission prompts bypassed, so a wider bind is an open remote
+    # shell. Set it to a private/VPN address (e.g. a Tailscale 100.x IP) to
+    # reach the studio from another machine you trust. Never 0.0.0.0 on a
+    # box with a public IP.
+    PAI_BIND_HOST="${PAI_BIND_HOST:-127.0.0.1}"
+    export PAI_BIND_HOST
+    if [ "$PAI_BIND_HOST" = "127.0.0.1" ] || [ "$PAI_BIND_HOST" = "localhost" ]; then
+        PAI_ADVERTISE_HOST="localhost"
+    else
+        PAI_ADVERTISE_HOST="$PAI_BIND_HOST"
+        echo "Bind: ${PAI_BIND_HOST} — the studio will be reachable from other hosts that can route to it."
+        echo "      Routes are unauthenticated and the embedded terminal runs an agent; keep this on a private network."
+    fi
+    export PAI_ADVERTISE_HOST
+    export WEB_ORIGIN="http://${PAI_ADVERTISE_HOST}:${WEB_PORT}"
+    export VITE_VIEWER_URL="http://${PAI_ADVERTISE_HOST}:${VIEWER_PORT}"
 
     # Session names include the port so two clones with different .env values
     # get distinct tmux sessions instead of one stomping the other.
@@ -287,10 +315,9 @@ launch_tunnel() {
     echo -n "  Waiting for tunnel URL"
     if ! wait_until 30 _grep_tunnel_url_to_file; then
         echo ""
-        echo "ERROR: cloudflared tunnel did not come up in 30s."
-        echo "  Video generation needs a publicly-fetchable URL for PAI's"
-        echo "  video-generation-assets endpoint to pull refs from, so this is a hard"
-        echo "  prerequisite — the server won't start."
+        echo "WARNING: cloudflared tunnel did not come up in 30s — continuing without it."
+        echo "  Media generation is unaffected: deAPI uploads refs directly, so no"
+        echo "  public URL is required. Only viewer-sharing needs the tunnel."
         echo ""
         echo "  Diagnose: tmux attach -t $TUNNEL_SESSION   (then Ctrl-b d to detach)"
         echo "  Common causes:"
@@ -300,17 +327,28 @@ launch_tunnel() {
         echo "    • cloudflared is outdated — 'brew upgrade cloudflared'"
         echo "  Workaround: run a named Cloudflare tunnel and set"
         echo "    PUBLIC_VIEWER_URL=https://your.named.tunnel in .env"
-        exit 1
+        return 0
     fi
     echo " $(cat "$TUNNEL_URL_FILE")"
 }
 
 ensure_tunnel() {
-    reap_stale_tunnel
     if [ -n "${PUBLIC_VIEWER_URL:-}" ]; then
+        reap_stale_tunnel
         echo "Tunnel: using PUBLIC_VIEWER_URL from .env (${PUBLIC_VIEWER_URL})"
         echo "$PUBLIC_VIEWER_URL" > "$TUNNEL_URL_FILE"
-    elif tmux has-session -t "$TUNNEL_SESSION" 2>/dev/null; then
+        return
+    fi
+    # No cloudflared → no tunnel, and that is fine: nothing on the
+    # generation path reads .tunnel_url now that refs upload directly.
+    if ! command -v cloudflared >/dev/null 2>&1; then
+        echo "Tunnel: skipped (cloudflared not installed) — not needed for deAPI generation."
+        echo "  Install cloudflared, or set PUBLIC_VIEWER_URL in .env, only if you want a"
+        echo "  public URL for the viewer's asset routes."
+        return
+    fi
+    reap_stale_tunnel
+    if tmux has-session -t "$TUNNEL_SESSION" 2>/dev/null; then
         echo "Tunnel session '$TUNNEL_SESSION' already running."
     else
         launch_tunnel
@@ -347,7 +385,7 @@ start_viewer() {
     # (e.g. `PAI_AGENT_BYPASS=0 ./scripts/start.sh`) or .env, so pass them
     # explicitly too.
     tmux_ensure_session "$VIEWER_SESSION" \
-        "cd ${PAI_REPO_ROOT} && WEB_ORIGIN='${WEB_ORIGIN}' VIEWER_PORT='${VIEWER_PORT}' PAI_DEFAULT_AGENT_ID='${PAI_DEFAULT_AGENT_ID}' PAI_AGENT_BYPASS='${PAI_AGENT_BYPASS:-}' node --watch server/local_viewer.js"
+        "cd ${PAI_REPO_ROOT} && WEB_ORIGIN='${WEB_ORIGIN}' VIEWER_BIND='${PAI_BIND_HOST}' VIEWER_HOST='${PAI_ADVERTISE_HOST}' VIEWER_PORT='${VIEWER_PORT}' PAI_DEFAULT_AGENT_ID='${PAI_DEFAULT_AGENT_ID}' PAI_AGENT_BYPASS='${PAI_AGENT_BYPASS:-}' node --watch server/local_viewer.js"
 }
 
 start_web() {
@@ -360,18 +398,20 @@ start_web() {
     # custom vars, so vite.config.ts wouldn't see WEB_PORT and the web bundle
     # wouldn't see VITE_VIEWER_URL otherwise.
     tmux_ensure_session "$WEB_SESSION" \
-        "cd ${PAI_REPO_ROOT}/web && WEB_PORT='${WEB_PORT}' VITE_VIEWER_URL='${VITE_VIEWER_URL}' npm run dev"
+        "cd ${PAI_REPO_ROOT}/web && WEB_PORT='${WEB_PORT}' VITE_VIEWER_URL='${VITE_VIEWER_URL}' npm run dev -- --host ${PAI_BIND_HOST}"
 }
 
 # ---- verification ---------------------------------------------------------
 
 # wait_for_local_port <label> <port> <session>
-# Curl http://localhost:<port>/ until it answers. Hard-exit on timeout with
-# a hint pointing at the tmux session that should be hosting it.
+# Curl the advertised host until it answers. Hard-exit on timeout with
+# a hint pointing at the tmux session that should be hosting it. Probing
+# the bind address (not a hardcoded localhost) matters: with
+# PAI_BIND_HOST set, nothing is listening on 127.0.0.1 at all.
 wait_for_local_port() {
     local label="$1" port="$2" session="$3"
     echo -n "Waiting for ${label} to listen on :${port}"
-    if ! wait_until 10 curl -sf -o /dev/null "http://localhost:${port}/"; then
+    if ! wait_until 20 curl -sf -o /dev/null "http://${PAI_ADVERTISE_HOST}:${port}/"; then
         echo ""
         echo "ERROR: ${label} did not come up on port ${port}."
         echo "  Check: tmux attach -t $session"
@@ -401,10 +441,11 @@ _resolve_tunnel_ip() {
 # check converge on what actually matters for video refs — and if 1.1.1.1
 # can't see it after our retry budget, neither can PAI, so it's a real fail.
 verify_tunnel_reachable() {
+    # No tunnel is a supported configuration now: deAPI pulls nothing from
+    # us, so readiness must not depend on a public URL existing.
     if [ ! -s "$TUNNEL_URL_FILE" ]; then
-        echo "ERROR: .tunnel_url is missing after tunnel setup — refusing to declare Ready."
-        echo "  Recover: ./scripts/stop.sh && ./scripts/start.sh"
-        exit 1
+        echo "Tunnel: none configured — skipping reachability probe (media generation does not use it)."
+        return 0
     fi
     TUNNEL_URL_VAL="$(cat "$TUNNEL_URL_FILE")"
     TUNNEL_HOST="${TUNNEL_URL_VAL#https://}"
@@ -443,8 +484,8 @@ print_ready_banner() {
     echo "Ready."
     echo "============================================================"
     echo ""
-    echo "  Viewer:   http://localhost:${VIEWER_PORT}/projects"
-    echo "  Web UI:   http://localhost:${WEB_PORT}/"
+    echo "  Viewer:   http://${PAI_ADVERTISE_HOST}:${VIEWER_PORT}/projects"
+    echo "  Web UI:   http://${PAI_ADVERTISE_HOST}:${WEB_PORT}/"
     if [ -s "$TUNNEL_URL_FILE" ]; then
         echo "  Tunnel:   $(cat "$TUNNEL_URL_FILE")   (rotates on restart)"
     fi

@@ -1,95 +1,199 @@
 <div align="center">
 
-# PAI-Pro
+# filmhut
 
-**The local AI filmmaking studio, driven from your coding agent.**
+**A local-first AI filmmaking studio, running on decentralised GPU compute.**
 
-[简体中文](README.zh-CN.md) · [English](README.md)
-
-[Try the hosted web service](https://pai.utopai.film/)
-
-[![Utopai Studios](https://img.shields.io/badge/Utopai_Studios-4285F4?style=flat&logo=data%3Aimage/png%3Bbase64%2CiVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAACXBIWXMAAAsTAAALEwEAmpwYAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAXeSURBVHgB7VdpSJVpFD5edTSzzWnTMiWXaBHHomUoarSoTLJ%2B9KOBghZqSutHA6E/IqmpoYggiakgKhuKYkBIEqOgZaaMImghmjbNxBZiTMXUTK/3zPMc7/241U0dmOhPB16%2B977b2Z7zvO8V%2BSpfWIJ6OB%2BBljVixIjsxMTEpF69ekU0NDQ037t3rwLfYsyVonV413rkf5JgtG8HDRpUc/HiRY%2BqeiAaSM6fP6%2BjR4%2BuwvpU775Ajri8fVdPleedPn2aGjsg2pXQMLfbrZcvX3ZjX/kHinxR/GPdunV14eHh8dJN5Kn89/b2djcP7Urevn2rb968sdbc3Kytra0cbj916pTyDLRQKIxD6v4ZP358x9atW3Xu3LkVGA/vSvmv7k4J6Cmlrq5OYaBevXrVlNbW1urhw4c1KytLp0yZovPnz9cTJ064IyIicsaMGaNBQUHEhY3TaPRjAylnWGJgvedTngNwWlNTY4a8fv1aN2/erPCQCnjoR23hwoUKwHb4fl%2B4cEGrq6v1U967%2Bvbte5M5D6S8srLSvCYezp07p2FhYepyuQIq9rW8vDynDyP/wjcD7ScJAERD7pEjR9QHOEbh3bt31p80aZKWlpba3NixY00xvfb3PFAUQkJCHCO9xkT4RbvTa%2B%2B3gwdkZGS4EV4bePnypWCzDBw4UJBHQSglODhYHjx4IFwDu2TAgAGyZcsWOX78uMyaNUugsPNQV%2BexcEJ2794tkZGRcu3atY7U1NRmrNfMzMxqTP/mH4lkbPJcuXJFb926pYsXL9a9e/fqtGnTtKWlRefMmeN47fP20KFDBsBHjx4pUK4PHz7UGzdu6IsXLzQ7O9uJQklJifbv39%2BigRRrQkKCnjlzxqLqn4JQ5pTWURkV9OnTR58/f26H79%2B//71QA926Z8%2BeT4Z/9erVztiaNWtM2YQJE0z5smXLDMTetU4ImO/cAwcOyNOnT20AvwVlJqtWrRIc5ljK0N%2B5c0eKioqccPfr108QCZtjuMvKyqxPuXTpktTX18vjx48FkZC4uDgBZ3Cqzd8ANw4p4ERjY6Pluq2tTZKTkyUmJkYqKiqcvDLvT548sdxTVq5cKQipJCUlyYoVKwwHoO9OpMFwYgnRFZCVGREfH29OonwbuSbE5xmUtnCSoHv16pUUFhbK0qVL5fbt25Kenm7AQxXYgcOGDZP79%2B/LsWPHZOTIkWY0PT169Kjk5uYKytX2UZBC7mvFuU2jRo2KxL4wRCQI%2BCnxxwA9bN61a5flBh5oVFSURkdHW%2BnBa4WBTo5nzpxpYOvdu7eCYhUh16FDh1neiRkoctbOmzePZxXJx/IeF4QSWEQr6ZIbUSr2JdMRVAQSK8HfEDZS7fbt2/Xs2bMG4okTJ743n5%2Bfz%2B%2BP0o24kKef6QGwoCdPnnQYcMeOHQ6pbNy4UdPS0uw3jdm0aZNev35dgRcjLl5CBQUFjpE8b%2B3atSSW6K6UB%2BGwQix2g%2Bc9LBtuZgrI9T7ZsGGD1THyp8CILliwwNYBD4qqUHLI3bt3FTm28YMHD/LrmTp1aq109/CBAQ3Dhw/3AEx2MIX5ffbsmfV58fiEngNodinxBsT1arUNkFmaFi1a5HDAvn37%2BE2Qbh4hnEz0crabB5GUfGGkkA3pGe/8nJwciw7nUNNaXFxsfbyIdMmSJbpz507dtm2bLl%2B%2BnJcXw/%2BL9EBoxDdU7LOeFUD0sz99%2BnRTVFVVZcb4hAj3GYn7wCh8yJAhDgBDQ0P5zZQePsNkxowZleJHrQQeD6ExsbGxOnjwYAUPWAky7KyO8vJySxUfI4zM7NmzCTzr4z3gWb9%2BfX1XOoM%2BiILP%2BnS0fKTlh3Hjxn2DfAsMMSLCi0YQBYFBAjIxguJv3nxkQZIQx8impGX8Tmlqavpb/uNr%2BUPDvkMj995EXbeCSu1xwhIkWFNSUowvGDFGj6RER3Ch/SmfUaLQvocB%2BZMnTy5DvxIGtODdYEYwbbhH0qT7/x6fTcKkp%2BD7Kl9S/gWQAm5AIYveoQAAAABJRU5ErkJggg%3D%3D&logoColor=white)](https://www.utopaistudios.com/)
-[![Discord][discord-shield]][discord-url]
-[![Follow @UtopaiStudios](https://img.shields.io/badge/Follow-%40UtopaiStudios-000000?style=flat&logo=x&logoColor=white)](https://x.com/UtopaiStudios)
-<br />
-[![Claude Code supported](https://img.shields.io/badge/Claude_Code-supported-2EA44F?style=flat&labelColor=D97757&logo=anthropic&logoColor=white)][claude-code-url]
-[![Codex supported](https://img.shields.io/badge/Codex-supported-2EA44F?style=flat&labelColor=111111&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI%2BPGcgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjZmZmIiBzdHJva2Utd2lkdGg9IjUuNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48cGF0aCBkPSJNMzIgOGM2LjIgMCAxMS40IDMuMiAxNC4zIDguMUwzMiAyNC40IDE3LjcgMTYuMUMyMC42IDExLjIgMjUuOCA4IDMyIDhaIi8%2BPHBhdGggZD0iTTUwLjIgMTguM2M1LjQgMy4xIDguMSA4LjggNy44IDE0LjVsLTE0LjMtOC4zVjguMWMyLjUgMS4yIDQuOCAzLjEgNi41IDEwLjJaIiB0cmFuc2Zvcm09InJvdGF0ZSg2MCAzMiAzMikiLz48cGF0aCBkPSJNNTAuMiAxOC4zYzUuNCAzLjEgOC4xIDguOCA3LjggMTQuNWwtMTQuMy04LjNWOC4xYzIuNSAxLjIgNC44IDMuMSA2LjUgMTAuMloiIHRyYW5zZm9ybT0icm90YXRlKDEyMCAzMiAzMikiLz48cGF0aCBkPSJNNTAuMiAxOC4zYzUuNCAzLjEgOC4xIDguOCA3LjggMTQuNWwtMTQuMy04LjNWOC4xYzIuNSAxLjIgNC44IDMuMSA2LjUgMTAuMloiIHRyYW5zZm9ybT0icm90YXRlKDE4MCAzMiAzMikiLz48cGF0aCBkPSJNNTAuMiAxOC4zYzUuNCAzLjEgOC4xIDguOCA3LjggMTQuNWwtMTQuMy04LjNWOC4xYzIuNSAxLjIgNC44IDMuMSA2LjUgMTAuMloiIHRyYW5zZm9ybT0icm90YXRlKDI0MCAzMiAzMikiLz48cGF0aCBkPSJNNTAuMiAxOC4zYzUuNCAzLjEgOC4xIDguOCA3LjggMTQuNWwtMTQuMy04LjNWOC4xYzIuNSAxLjIgNC44IDMuMSA2LjUgMTAuMloiIHRyYW5zZm9ybT0icm90YXRlKDMwMCAzMiAzMikiLz48L2c%2BPC9zdmc%2B&logoColor=white&logoWidth=16)][codex-url]
-
-[discord-shield]: https://img.shields.io/badge/Discord-Join-green?style=flat&logo=discord&logoColor=white
-[discord-url]: https://discord.gg/hb4MkHND
-[claude-code-url]: https://code.claude.com/docs/en/overview
-[codex-url]: https://developers.openai.com/codex/cli
-
-<img src="docs/assets/canvas_view.webp" alt="PAI-Pro canvas view" width="100%" />
+Canvas · timeline · agent terminal — with every media capability served by [deAPI](https://deapi.ai) instead of a single vendor's hosted API.
 
 </div>
 
 ---
 
-## About this copy (filmhut)
+## What this is
 
-`conrader/filmhut` is a **private derivative** of [`Utopai-Research/pai-pro`](https://github.com/Utopai-Research/pai-pro). The one substantive change: every media capability — image, image pro, video, voice, 4K upscale — runs on [deAPI](https://deapi.ai) via `DEAPI_KEY` instead of the PAI hosted service. The canvas, timeline, agent terminal, skills, and asset flow are upstream's.
+filmhut is a private derivative of [**Utopai-Research/pai-pro**](https://github.com/Utopai-Research/pai-pro). The canvas, timeline, project model, embedded agent terminal, and filmmaking skills are upstream's work. The change here is the **compute supplier**: every image, video, voice, music, and upscale call now goes to deAPI's open-model fleet rather than the PAI hosted service.
 
-Because references upload directly to deAPI as multipart data, no Cloudflare tunnel is needed for generation. Run `node scripts/deapi-doctor.mjs` (free) to check your key, balance, and that each configured model exists in your account — deAPI's catalog is account-scoped.
+The upstream README is preserved verbatim at [`docs/UPSTREAM_README.md`](docs/UPSTREAM_README.md).
 
-Pulling upstream changes (the `upstream` remote is fetch-only; pushing to it is disabled):
+**Why swap it.** deAPI runs open models (FLUX, LTX-2, Qwen, Whisper, AceStep) on a decentralised GPU network, priced per task. For this workload it lands roughly 10–30× cheaper than the hosted alternative, and every model is selectable — you are not locked to one vendor's opinion of "the video model". The trade is a smaller reference budget and a lower resolution ceiling; both are documented honestly below.
 
-```bash
-git fetch upstream
-git merge upstream/main      # expect conflicts in server/pai_*_client.js and model_registry.js
-```
-
-**Licensing:** upstream ships under the PAI PRO Sustainable Use License (see [LICENSE.md](LICENSE.md)), which is *not* open source. It permits internal business, research, and personal use, and forbids commercial use or commercial derivative works — the Skills in particular. That is why this copy is private. Keep it that way, and leave the Utopai Studios notices intact; the license forbids removing them.
+> **Licence:** upstream ships under the PAI PRO Sustainable Use License — *not* open source. It permits internal business, research, and personal use, and **forbids commercial use and commercial derivative works**, singling out the Skills. That is why this repo is private. See [LICENSE.md](LICENSE.md); the Utopai Studios notices must stay intact.
 
 ---
 
-## What's PAI-Pro?
-
-PAI-Pro is a local-first AI filmmaking workspace built around four things:
-
-- **Your own [Claude Code][claude-code-url] or [Codex][codex-url]**, capable agents connected to local project files, persistent context, and customized filmmaking skills. ([Setup and agents](docs/setup.md))
-- **End-to-end filmmaking skills** for scripts, images, videos, and voice. ([More skill details](docs/skills.md))
-- **A visual canvas and timeline** for designing scenes, managing assets, arranging shots, and keeping larger productions organized.
-- **One API service for story media** across image, video, voice, and 4K upscaling, so productions do not need separate providers for each step. ([API service details](docs/api_service.md))
-
 ## Quick start
 
-Use Claude Code or Codex to install PAI-Pro for you. Paste this into your agent:
+```bash
+cp .env.example .env          # then set DEAPI_KEY (quote it — see below)
+node scripts/deapi-doctor.mjs # free preflight: key, balance, models, live prices
+./scripts/start.sh            # http://localhost:7443
+```
 
-> Clone [`https://github.com/Utopai-Research/pai-pro`](https://github.com/Utopai-Research/pai-pro), read the setup docs in [README.md](README.md) and [docs/setup.md](docs/setup.md), then install PAI-Pro for my current agent. Ask me for my `PAI_KEY`, use Docker unless I ask for local development, and start the app when setup is complete.
+Get a key at [app.deapi.ai/dashboard/api-keys](https://app.deapi.ai/dashboard/api-keys) — new accounts get $5 free.
 
-| Choose | Commands |
-| --- | --- |
-| <img src="https://cdn.jsdelivr.net/npm/simple-icons/icons/anthropic.svg" alt="Anthropic" width="16" height="16" /> **[Claude Code][claude-code-url]** | Docker: `./scripts/docker-start.sh`<br />Local: if ports are busy, run `./scripts/stop.sh` first; then `./scripts/setup --agent claude` and `./scripts/start.sh` |
-| <img src="https://cdn.jsdelivr.net/gh/glincker/thesvg@main/public/icons/openai/light.svg" alt="OpenAI" width="16" height="16" /> **[Codex][codex-url]** | Docker: `PAI_DEFAULT_AGENT_ID=codex ./scripts/docker-start.sh`<br />Local: if ports are busy, run `./scripts/stop.sh` first; then `./scripts/setup --agent codex` and `PAI_DEFAULT_AGENT_ID=codex ./scripts/start.sh` |
+> **Quote the key.** deAPI keys are Laravel tokens shaped `12345|abcdef…`. `start.sh` sources `.env` as shell, so an unquoted `|` is parsed as a pipeline and kills the boot. Write `DEAPI_KEY='12345|abcdef…'`.
 
-Open Docker at <http://localhost:7588> or local at <http://localhost:7443>.
+**No tunnel required.** Upstream needed a Cloudflare tunnel so the provider could fetch reference files over a public URL. deAPI takes references as direct multipart uploads, so generation works with no tunnel at all.
 
-## API Service
+**Reaching it from another machine:** `PAI_BIND_HOST=100.x.y.z ./scripts/start.sh` binds the viewer and web UI to that address (e.g. a Tailscale IP). It defaults to `127.0.0.1` on purpose — **the viewer's routes are unauthenticated and its terminal spawns an agent with permission prompts bypassed**, so never bind `0.0.0.0` on a box with a public IP.
 
-> **This fork routes all media generation through [deAPI](https://deapi.ai) via `DEAPI_KEY`, not the PAI hosted service described below.** The pricing table below reflects the original upstream PAI service, not this fork.
+---
 
-`PAI_KEY` gives each production one service for image, image pro, video, voice, and 4K upscaling, without separate provider keys for each step. Use the <a href="https://pai-pro.utopaistudios.com/keys" target="_blank" rel="noopener noreferrer">PAI Pro Developer Platform</a> to manage keys, tasks, balance, and credits. It also supports less restrictive video moderation via asset preupload and helps support this project. Paid generations are staged first; for BYOK and exact payloads, see [API Service](docs/api_service.md).
+## The compute layer
 
-| Capability | Quality | Time | # of references | Estimated price |
+One key (`DEAPI_KEY`) covers every capability. All generation is asynchronous: submit → poll `GET /api/v2/jobs/{id}` → download a presigned result URL.
+
+| Capability | deAPI endpoint | Client |
+|---|---|---|
+| Image | `POST /api/v2/images/generations` | `server/pai_image_client.js` |
+| Image with references | `POST /api/v2/images/edits` (multipart) | same |
+| Text-to-video | `POST /api/v2/videos/generations` | `server/pai_video_client.js` |
+| Image-to-video | `POST /api/v2/videos/animations` (multipart) | same |
+| Audio-conditioned video | `POST /api/v2/videos/audio-syncs` (multipart) | same |
+| Voice | `POST /api/v2/audio/speech` (multipart) | `server/pai_voice_client.js` |
+| Video upscale | `POST /api/v2/videos/upscales` (multipart) | `server/pai_upscale_client.js` |
+
+Shared HTTP, retry policy, error classification, job polling, catalogue reads, and price quoting live in [`server/deapi_client.js`](server/deapi_client.js). The `pai_*_client.js` filenames were kept deliberately so the diff against upstream stays small — they speak deAPI now.
+
+**Every paid call is quoted first.** Each client fetches the exact price from `/price` before submitting and reports it back as `cost_usd`, so what you see is what you were charged — not an estimate.
+
+---
+
+## Video models
+
+The catalogue is **account-scoped**: two keys can legitimately see different models. `deapi-doctor.mjs` prints yours. Pick one per capability with the `DEAPI_*_MODEL` env vars in `.env`.
+
+| Model | Max resolution | Clip length | Routes | Notes |
 |---|---|---|---|---|
-| [`generate_image`](server/cli/generate_image.js) | Great | ~10-30s | 16 imgs | $0.07 / $0.10 / $0.15 for 1K / 2K / 4K |
-| [`generate_image_pro`](server/cli/generate_image_pro.js) | Best | ~3-6 min | 32 imgs | $0.26 / $0.45 / $0.77 for 1K / 2K / 4K |
-| [`generate_video`](server/cli/generate_video.js) | Best | ~3-6 min | 9 imgs / 3 vids / 3 auds | $0.08/s / $0.20/s / $0.44/s for 480p / 720p / 1080p |
-| [`upscaler`](server/cli/upscaler.js) | Best | 1-min example: ~4-8 min landed | 1 video | 1-min example: $1.35 for 1080p->4K, $2.35 for 720p->4K |
-| [`generate_voice`](server/cli/generate_voice.js) | Good | ~5-15s | N/A | $0.01 per 500 input characters, rounded up |
+| **`Ltx2_3_22B_Dist_INT8`** (default) | 1024×1024 | 49–241 frames @ 24fps → **2.0–10.0s** | text, image, **audio** | Generates a native **audio track**. Only model supporting audio-conditioned (lip-synced) video. Supports a last frame. |
+| **`Ltxv_13B_0_9_8_Distilled_FP8`** | 768×768 | 30–120 frames @ 30fps → **1.0–4.0s** | text, image | **~8.6× cheaper.** 1 inference step. No audio track, no audio-sync. Supports a last frame. |
+| `Wan2_2_Animate_14B_INT8` | 852×852 | ≤8s input | character replace | Swaps a person in existing footage for a reference character. Not wired into a CLI yet. |
 
-## Resources
+**Clip length is a frame budget, not a time budget.** 241 frames at a fixed 24fps is a hard 10.04s ceiling on the default model — asking for more clamps, and the CLI reports the effective duration plus a `note`. For longer scenes, chain clips: extract the last frame and use it as the next clip's opening frame.
 
-- 💬 [Discord][discord-url] — questions, ideas, support, and show & tell
-- ⚙️ [API Service](docs/api_service.md) — developer platform notes, BYOK counterparts, and exact media JSON payloads
-- 🎬 [Skills reference](docs/skills.md) — how filmmaking skills route agent requests
-- 🚀 [Setup and agents](docs/setup.md) — choose Docker or host mode, configure Claude/Codex, and understand ports, auth, and permissions
-- 🏗 [Architecture](docs/architecture.md) — viewer, CLI, canvas, and project-file layout
-- ❓ [FAQ](docs/faq.md) — common setup and generation issues
-- 🐛 [Issues](https://github.com/Utopai-Research/pai-pro/issues) — bug reports only
-- 🤝 [Contributing](CONTRIBUTING.md) — contribution guide, proprietary-skills carve-out, and CLA flow
+**References are frames, not identity anchors.** A video reference image becomes the clip's literal **first frame** (a second becomes the last frame) — max 2, plus at most 1 audio reference. It is *not* a character-identity anchor. To hold a character across many shots, build a character sheet once and compose every scene's opening frame from it with the image-edit model, then animate that frame.
 
-## License
+### Upscalers
 
-PAI-Pro is released under the [PAI PRO Sustainable Use License](LICENSE.md), which permits personal use, non-commercial research, and internal business use. Commercial use of PAI-Pro Skills or enterprise-designated source code/Skills requires an explicit agreement; [enterprise licenses](mailto:enterprise@utopaistudios.com) are available.
+| Model | Input cap | Scale | 10s of 1024×576 |
+|---|---|---|---|
+| `RealESRGAN_Vid_x2` | 1024×1024, ≤30s | fixed 2× | **$0.014** |
+| `RealESRGAN_Vid_x4` | 1024×1024, ≤15s | fixed 4× | — |
+| `FlashVSR_Tiny` (default) | 1024×1024, ≤10s | 2–4× | $0.074 (2×) / $0.297 (4×) |
+
+`upscaler.js` targets 4K, so on FlashVSR it selects 4× and costs ~$0.30 per 10s clip. `RealESRGAN_Vid_x2` is ~5× cheaper for a 2× pass.
+
+---
+
+## Image, voice, and music models
+
+| Capability | Model | Notes |
+|---|---|---|
+| Image (default) | `Flux1schnell` | 2048² max, 1–10 steps. Fast drafts. |
+| Image | `ZImageTurbo_INT8` | 2048² max, 1–50 steps — more steps, more detail. |
+| Image | `ZAnimeDistill_8Step_INT8` | 2048² max. Anime/stylised. |
+| Refs / edit (default) | `Flux_2_Klein_4B_BF16` | 1536² max, steps pinned at 4, **3 reference images**, custom output size. |
+| Refs / edit | `QwenImageEdit_Plus_NF4` | 1024² max, 1–50 steps, **1 reference only**, and **no custom output size** — output inherits the reference's dimensions. Markedly more photoreal at 40 steps. |
+| Voice (default) | `Qwen3_TTS_12Hz_1_7B_VoiceDesign` | Voice **design**: the CLI's `--prompt` describes the voice. Min 10 chars. |
+| Voice | `Kokoro` | Preset voices, ~17× cheaper per character, ignores the design brief. |
+| Voice | `Qwen3_TTS_12Hz_1_7B_Base` | Voice **cloning** from 5–15s of reference audio. |
+| Music | `AceStep_1_5_Turbo` | 10–300s in one call. `guidance_scale` must be **≤1**. |
+| Transcription | `WhisperLargeV3Ct2` | Timestamps + diarization. |
+
+---
+
+## What it costs
+
+Every figure below was read from deAPI's live `/price` endpoint (August 2026), not from a rate card.
+
+### Video
+
+| Model | Shot | Price |
+|---|---|---|
+| Ltx2 | 1024×576, 2.0s | $0.0422 |
+| Ltx2 | 1024×576, 5.0s | $0.0470 |
+| Ltx2 | 1024×576, **10.0s** | **$0.0553** |
+| Ltx2 | 1024×1024, 10.0s | $0.0611 |
+| Ltxv | 768×432, 4.0s | **$0.0064** |
+| Ltxv | 512×288, 4.0s | $0.0041 |
+
+**Video pricing is affine, not proportional** — a fixed ~$0.039 base per job plus ~$1.16e-10 per pixel-frame. A 2s clip costs $0.042 and a 10s clip $0.055, so **short clips are terrible value**. Prefer fewer, longer takes. A per-second mental model will overestimate long clips by up to 7×.
+
+### Image, voice, music
+
+| Call | Price |
+|---|---|
+| Flux1schnell 1024×576, 4 steps | $0.0019 |
+| Flux1schnell 2048×1152, 4 steps | $0.0049 |
+| Flux.2 Klein 1280×720, 4 steps | $0.0034 |
+| ZImageTurbo 1024×576, 8 steps | $0.0063 |
+| Flux.2 Klein **edit** (up to 3 refs) | $0.0066 — flat, any resolution |
+| Qwen **edit**, 20 / 40 steps | $0.0179 / $0.0348 — flat, any resolution |
+| Voice-design TTS, 500 chars | $0.0064 ($12.86 / 1M chars) |
+| Kokoro TTS, 500 chars | $0.0004 ($0.77 / 1M chars) |
+| Music, 185s | $0.0020 |
+| Transcription, 10 min | $0.0128 |
+
+Image generation scales with pixels × steps. **Edits are flat-rate and resolution-independent** — driven only by step count.
+
+### Worked examples
+
+| Piece | Build | Cost |
+|---|---|---|
+| One 6s establishing shot (frame + clip) | Flux1schnell + Ltx2 | **$0.051** |
+| 30s, 4 shots, no dialogue | 4 frames + 4 clips | **$0.213** |
+| 3 min, 18 shots, 2 characters, lip-synced dialogue + score | 18 Qwen composes + 14 voice lines + 18 audio-sync clips + music | **≈ $2.40** |
+| 60 min on Ltx2 (359 shots) | the same recipe, scaled | **≈ $22.80** |
+| 60 min on Ltxv (900 × 4s shots) | 768×432, no native audio | **≈ $8.00** |
+
+Long-form is where model choice dominates: switching the video model turns an hour of footage from $23 into $8, at 768×432 with no audio track and a 4s clip ceiling.
+
+---
+
+## Model selection
+
+All optional; these are the built-in defaults. Discover what your key can see with `deapi-doctor.mjs`.
+
+```bash
+DEAPI_IMAGE_MODEL=Flux1schnell
+DEAPI_IMAGE_EDIT_MODEL=Flux_2_Klein_4B_BF16
+DEAPI_IMAGE_PRO_MODEL=Flux_2_Klein_4B_BF16
+DEAPI_IMAGE_PRO_EDIT_MODEL=Flux_2_Klein_4B_BF16
+DEAPI_VIDEO_MODEL=Ltx2_3_22B_Dist_INT8
+DEAPI_TTS_MODEL=Qwen3_TTS_12Hz_1_7B_VoiceDesign
+DEAPI_UPSCALE_MODEL=FlashVSR_Tiny
+```
+
+`model_registry.js` keeps provider-neutral capability ids (`image-generation`, `video-generation`, `tts`) for canvas metadata, so changing a slug doesn't rewrite your project history.
+
+---
+
+## Preflight
+
+`node scripts/deapi-doctor.mjs` is free and read-only. It verifies the key authenticates, reports your balance, walks the paginated catalogue, checks that **every configured slug actually supports the inference type it will be called with**, prints each model's real limits, and quotes a representative price per capability. Run it first whenever something misbehaves.
+
+---
+
+## Known limits
+
+- **10.04s** maximum clip on the default model; chain clips for longer scenes.
+- **2 image references** per clip (first + last frame), **1 audio reference**. Video-as-reference is not supported at all — extract a frame instead.
+- **1024×576** effective video resolution; upscale afterwards if you need more.
+- Reference images ≤10MB, audio ≤20MB, video ≤50MB per request.
+- The catalogue is account-scoped and changes; never hardcode a slug.
+
+## Documentation quirks worth knowing
+
+Found the hard way, against the live API:
+
+- `/price` validates `prompt`, `seed`, and `mode` — not merely the cost-driving fields the docs describe. Quote with the body you intend to submit.
+- Pricing is **affine**, not the proportional model the public rate card implies.
+- `guidance_scale` must be **≤1** on the AceStep music models.
+- `scale` is **required** on upscalers exposing a min/max range, and **rejected** on fixed-factor ones.
+- Models declaring `supports_custom_output_size: false` reject `width`/`height` outright and size from the input image.
+- `Ltx2` reports `supports_steps: false` yet requires `steps ≥ 8`. `info.limits` is authoritative; `features` flags are advisory.
+
+## Credits
+
+Built on [pai-pro](https://github.com/Utopai-Research/pai-pro) by [Utopai Studios](https://www.utopaistudios.com/). Compute by [deAPI](https://deapi.ai).
