@@ -100,6 +100,26 @@ The upstream README is preserved verbatim at [`docs/UPSTREAM_README.md`](docs/UP
 
 ---
 
+## Portable continuity across coding agents
+
+filmhut supplies media generation and orchestration. A separate, portable production context can carry continuity decisions between clips and between agents: a production brief; character, prop, location, and style bibles; a story-and-shot ledger; reference-asset plans; and incoming/outgoing constraints for every clip.
+
+That context is not tied to one agent's memory or one runtime. Codex, other coding agents, and cloud code can read the same project files, hand verified constraints to filmhut, and run the same inspect-and-repair loop. This is a portability promise for the production context and workflow, not a claim that every agent is embedded in filmhut or supports the same commands.
+
+The loop supports evaluation and preservation of character identity, props, locations, visual style, transitions, and music/audio continuity across clips. Generated media remains probabilistic and inspection can be subjective, so it does **not** guarantee perfect continuity. Record evidence, freeze clips that pass, classify failures, and regenerate only the failed clips; then recheck each replacement and its adjacent seams.
+
+### Install and use the continuity workflow
+
+1. Install and start filmhut with the deAPI setup above: keep the quoted `DEAPI_KEY`, run `node scripts/deapi-doctor.mjs`, then run `./scripts/start.sh`. The continuity workflow does not replace those requirements.
+2. Make the entire reusable `film-hut-filmmaking` skill folder available through your coding agent's supported instruction mechanism so its linked production-packet template remains available. For the local Codex setup, place it at `~/.codex/skills/film-hut-filmmaking` and invoke `$film-hut-filmmaking`; other agents and cloud runners can consume the same instructions and production packet through their own workspace conventions.
+3. Ask the agent to create or update the production packet and clip contracts before generation. Keep stable character and hero-object reference IDs, and separate immutable anchors from scene-variable state.
+4. Use filmhut's locally documented project workflow, agent instructions, capability skills, and CLI helpers when they are present. Treat them as version-specific hooks: inspect local help, preserve approval and staging gates, and do not assume undocumented deAPI features or limits.
+5. After each clip lands, inspect the clip and both relevant boundaries for identity, props, style/location, seams/transitions, and music/audio. Apply the smallest viable repair and preserve every passing clip.
+
+Because the production packet is portable, the planning and review agent can run locally or in cloud code while filmhut remains the generation/orchestration layer. Give any cloud runner only the project access and credentials it actually needs, and keep deAPI keys out of prompts, ledgers, logs, and shared assets.
+
+---
+
 ## The compute layer
 
 One key (`DEAPI_KEY`) covers every capability. All generation is asynchronous: submit → poll `GET /api/v2/jobs/{id}` → download a presigned result URL.
