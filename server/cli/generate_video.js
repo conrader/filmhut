@@ -39,6 +39,7 @@ import {
   removePending,
   removePendingSync,
 } from "./_pending.js";
+import { protectOnExit, recordProviderRef } from "./_resume.js";
 import { VIDEO_LIMITS } from "./_limits.js";
 import { checkPromptRefsWired } from "./_ref_guard.js";
 
@@ -225,9 +226,9 @@ if (args.stage && !routeOwnedPending) {
 }
 
 if (!routeOwnedPending) {
-  const cleanup = () => removePendingSync(jobId);
-  process.on("SIGINT",  () => { cleanup(); process.exit(130); });
-  process.on("SIGTERM", () => { cleanup(); process.exit(143); });
+  // Preserve paid work on the way out: mark the sidecar resumable rather than
+  // deleting it. See cli/_resume.js.
+  protectOnExit(jobId);
 }
 
 await writePending({
@@ -296,6 +297,8 @@ try {
     videoRefPaths: resolvedVideos.map((r) => r.absPath),
   });
 
+  // Durable BEFORE the first poll: after this line a dead process is recoverable.
+  recordProviderRef(jobId, taskId);
   const { videoUrl, durationSeconds } = await pollVideo(taskId);
   // Stream the MP4 straight to the tmp file — a 1080p clip is tens of MB,
   // and buffering it whole made the long-lived viewer OOM-prone under

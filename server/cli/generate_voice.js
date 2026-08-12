@@ -30,6 +30,7 @@ import {
   removePending,
   removePendingSync,
 } from "./_pending.js";
+import { protectOnExit, recordProviderRef } from "./_resume.js";
 import { kickPreupload } from "./_preupload_hook.js";
 import { VOICE_LIMITS } from "./_limits.js";
 
@@ -153,9 +154,9 @@ if (args.stage && !routeOwnedPending) {
 }
 
 if (!routeOwnedPending) {
-  const cleanup = () => removePendingSync(jobId);
-  process.on("SIGINT",  () => { cleanup(); process.exit(130); });
-  process.on("SIGTERM", () => { cleanup(); process.exit(143); });
+  // Preserve paid work on the way out: mark the sidecar resumable rather than
+  // deleting it. See cli/_resume.js.
+  protectOnExit(jobId);
 }
 
 await writePending({
@@ -174,7 +175,12 @@ let emitted = null;
 try {
   const projectId = args["project-id"] || (await readActiveProject());
 
-  const result = await paiGenerateVoice({ text: args.text, prompt: args.prompt });
+  const result = await paiGenerateVoice({
+    text: args.text,
+    prompt: args.prompt,
+    // Make the provider id durable the moment it exists, before polling.
+    onSubmitted: (ref) => recordProviderRef(jobId, ref),
+  });
   // PAI's tts returns the MP3 bytes inline (decoded from the upstream
   // envelope's body_base64). Stage the bytes to the .tmp/ holding area;
   // the mutator renames into assets/audios/<node-id>.mp3 below.

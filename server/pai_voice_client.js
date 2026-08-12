@@ -104,7 +104,7 @@ function ttsRequestShape(modelEntry, { text, prompt }) {
  * @throws  classified Error (.klass): bad_args / content_filtered /
  *          rate_limited / infra / transient / transient_exhausted
  */
-export async function generateVoice({ text, prompt } = {}) {
+export async function generateVoice({ text, prompt , onSubmitted} = {}) {
   if (typeof text !== "string" || !text.trim()) {
     throw err("bad_args", "generateVoice: empty text");
   }
@@ -150,6 +150,12 @@ export async function generateVoice({ text, prompt } = {}) {
     logTag: "deapi-tts",
   });
   const requestId = requestIdOf(submitted, "audio/speech");
+
+  // The supplier has the job and the money is committed. Report the id
+
+  // before polling so a caller can make it durable (see cli/_resume.js).
+
+  if (typeof onSubmitted === "function") { try { onSubmitted(requestId); } catch { /* never let bookkeeping fail a paid job */ } }
 
   const job = await pollJob(requestId, {
     intervalMs: 2_000,
