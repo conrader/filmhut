@@ -120,6 +120,7 @@ Do not use `node server/cli/...` from a project cwd or hardcode relative repo pa
 | `generate_voice.js` | `voice-compose` | Creates `audio_result` voice nodes, optionally derived from a character or shot note. |
 | `generate_music.js` | `voice-compose` | Paid music generation. One bed of 10-300s in a single call, landing as an `audio_result` with `subtype: "music"`. Flags: `--prompt` (style brief), `--duration`, `--guidance-scale`. |
 | `transcribe.js` | `voice-compose` | Speech-to-text over an existing asset — the one CLI that consumes rather than produces. Lands a note with timed segments in metadata. Flags: `--path`, `--diarize`, `--language`, `--srt <file>`. |
+| `check_continuity.js` | `continuity-compose` | Free local continuity signal: palette, exposure and composition agreement between an asset and its references. Flags: `--path`, `--ref` (repeatable), `--frames N`. Reports `identity_checked: false` — it does NOT verify a character is the same person. |
 | `resume_jobs.js` | none | Lists paid jobs left behind by an interrupted process; `--poll` collects anything that finished. Free. |
 | `upscaler.js` | none | Paid 4K video upscaling from an existing canvas source. Uses provider estimate from `upscale-create`. |
 | `mirror_url.js` | none | Mirrors an external image/audio/video URL into a canvas reference node. Flags: `--url`, optional `--kind <image|audio|video>`, `--label`. |
