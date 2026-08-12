@@ -100,23 +100,46 @@ The upstream README is preserved verbatim at [`docs/UPSTREAM_README.md`](docs/UP
 
 ---
 
-## Portable continuity across coding agents
+## Continuity across clips
 
-filmhut supplies media generation and orchestration. A separate, portable production context can carry continuity decisions between clips and between agents: a production brief; character, prop, location, and style bibles; a story-and-shot ledger; reference-asset plans; and incoming/outgoing constraints for every clip.
+Holding a character's face, a hero prop, a location, a visual style, and a sound bed steady across
+twenty shots is the hard part of AI filmmaking, and it is not something a prompt does for you. The
+`continuity-compose` skill makes it recorded state instead: write the constraints down once, hand
+them to each clip, and check what lands against what was promised.
 
-That context is not tied to one agent's memory or one runtime. Codex, other coding agents, and cloud code can read the same project files, hand verified constraints to filmhut, and run the same inspect-and-repair loop. This is a portability promise for the production context and workflow, not a claim that every agent is embedded in filmhut or supports the same commands.
+It ships with the repo — `skills/continuity-compose/` — and installs with every other skill through
+`./scripts/setup`. There is nothing separate to fetch.
 
-The loop supports evaluation and preservation of character identity, props, locations, visual style, transitions, and music/audio continuity across clips. Generated media remains probabilistic and inspection can be subjective, so it does **not** guarantee perfect continuity. Record evidence, freeze clips that pass, classify failures, and regenerate only the failed clips; then recheck each replacement and its adjacent seams.
+**The production packet.** Before generating a sequence, the agent writes four plain-text files
+under `projects/<active>/production/`:
 
-### Install and use the continuity workflow
+| File | Holds |
+|---|---|
+| `brief.md` | premise, format, duration, narrative spine, visual and audio approach |
+| `bibles.md` | one section per character, prop, location, style, and audio motif, each with a stable ID |
+| `shot-ledger.md` | the ordered clip list and the authoritative continuity state of each clip |
+| `reference-plan.md` | which asset anchors what, its provenance, and the clips it serves |
 
-1. Install and start filmhut with the deAPI setup above: keep the quoted `DEAPI_KEY`, run `node scripts/deapi-doctor.mjs`, then run `./scripts/start.sh`. The continuity workflow does not replace those requirements.
-2. Make the entire reusable `film-hut-filmmaking` skill folder available through your coding agent's supported instruction mechanism so its linked production-packet template remains available. For the local Codex setup, place it at `~/.codex/skills/film-hut-filmmaking` and invoke `$film-hut-filmmaking`; other agents and cloud runners can consume the same instructions and production packet through their own workspace conventions.
-3. Ask the agent to create or update the production packet and clip contracts before generation. Keep stable character and hero-object reference IDs, and separate immutable anchors from scene-variable state.
-4. Use filmhut's locally documented project workflow, agent instructions, capability skills, and CLI helpers when they are present. Treat them as version-specific hooks: inspect local help, preserve approval and staging gates, and do not assume undocumented deAPI features or limits.
-5. After each clip lands, inspect the clip and both relevant boundaries for identity, props, style/location, seams/transitions, and music/audio. Apply the smallest viable repair and preserve every passing clip.
+Every clip then carries a contract: what must be true in its first readable moment, and what it
+promises the next cut. Recurring elements get stable IDs (`CHAR-MARA-01`, `PROP-COMPASS-01`) used
+verbatim in every contract, with locked traits separated from state that legitimately changes.
 
-Because the production packet is portable, the planning and review agent can run locally or in cloud code while filmhut remains the generation/orchestration layer. Give any cloud runner only the project access and credentials it actually needs, and keep deAPI keys out of prompts, ledgers, logs, and shared assets.
+**Inspect, classify, repair the smallest unit.** After a clip lands and passes the per-asset prompt
+alignment check, it is compared against its neighbours and its anchors — never from memory. Breaks
+are classified as `identity`, `prop`, `location_style`, `seam`, or `audio`, and the verdict is
+recorded on the node. Clips that pass are **frozen**; only the failed clip is regenerated, reusing
+its approved inputs and changing only what the classified break points at. The replacement is
+re-checked against both adjacent contracts.
+
+Generated media is probabilistic and inspection is partly subjective, so this raises consistency —
+it does **not** guarantee it. When two repairs fail, the skill says what the models will not hold
+and offers a story or edit compromise rather than spending again.
+
+**Why the packet is plain text.** It is not tied to one agent's memory or one runtime. Codex, other
+coding agents, and cloud runners can read the same files, and the constraints survive a lost session
+or a change of tool. That is a portability promise about the production context, not a claim that
+every agent is embedded in filmhut or supports the same commands. Give any remote runner only the
+project access it needs, and keep deAPI keys out of prompts, ledgers, logs, and shared assets.
 
 ---
 
