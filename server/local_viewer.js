@@ -54,6 +54,12 @@ import express from "express";
 import { Server as SocketServer } from "socket.io";
 
 import { createBroadcasters } from "./lib/broadcasters.js";
+import {
+  createAuthMiddleware,
+  createSocketAuth,
+  loadOrCreateToken,
+  registerSessionRoute,
+} from "./lib/auth.js";
 import { PORT, PROJECTS_DIR, WEB_ORIGIN } from "./lib/paths.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -109,6 +115,16 @@ if (corsOptions) app.use(cors(corsOptions));
 // under the 100MB multipart cap in routes/uploads.js.
 app.use(express.json({ limit: "4mb" }));
 
+// Access control. Mounted BEFORE static and every route registration, so a
+// route added later cannot land outside it. See lib/auth.js for why loopback
+// is exempt and why the cookie carrier exists.
+const { token: ACCESS_TOKEN, created: TOKEN_CREATED } = await loadOrCreateToken(
+  path.resolve(__dirname, "..", ".env"),
+);
+const ALLOW_LOOPBACK = process.env.PAI_AUTH_LOOPBACK !== "0";
+app.use(createAuthMiddleware({ token: ACCESS_TOKEN, allowLoopback: ALLOW_LOOPBACK }));
+registerSessionRoute({ app, token: ACCESS_TOKEN });
+
 // Production: serve the prebuilt web bundle from web/dist BEFORE the API
 // routes. express.static passes through to next() when a path doesn't
 // resolve to a file, so /projects, /healthz, /models all still hit their
@@ -121,6 +137,8 @@ if (IS_PROD) {
 
 const httpServer = http.createServer(app);
 const io = new SocketServer(httpServer, corsOptions ? { cors: corsOptions } : undefined);
+// The socket surface spawns shells; authenticate the connection, not each event.
+io.use(createSocketAuth({ token: ACCESS_TOKEN, allowLoopback: ALLOW_LOOPBACK }));
 
 const broadcasters = createBroadcasters({ io, projects });
 const { mutatorHooks } = broadcasters;
@@ -196,8 +214,16 @@ async function boot() {
     console.log("");
     console.log("✨ PAI Pro is ready.");
     console.log("");
-    console.log(`    Open in your browser:  ${publicBase}`);
+    // The URL carries the token: opening the bare address on a protected
+    // server just yields a 401 page, so printing it without one would be an
+    // instruction that does not work.
+    console.log(`    Open in your browser:  ${publicBase}/?token=${ACCESS_TOKEN}`);
     console.log("");
+    if (TOKEN_CREATED) {
+      console.log("    An access token was generated and saved to .env as PAI_TOKEN.");
+      console.log("    Anyone with it can drive the studio and spend against your key.");
+      console.log("");
+    }
   });
 }
 
