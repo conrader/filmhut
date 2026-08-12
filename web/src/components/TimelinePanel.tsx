@@ -69,6 +69,7 @@ import {
 import { VIEWER_URL } from '@/lib/socket'
 import type { PendingGeneration, Workflow, VideoResultNode } from '@/types/canvas'
 import SortableClip from './timeline/SortableClip'
+import TrimControls from './timeline/TrimControls'
 import ClipGhostBody from './timeline/ClipGhostBody'
 import DraggableCompactCard from './timeline/DraggableCompactCard'
 import AvailableDroppable from './timeline/AvailableDroppable'
@@ -788,6 +789,15 @@ export function TimelinePanel({
     })
     if (removed) updates.push({ nodeId: sourceId, data: { shot_id: null } })
     await patchCanvasNodeDataBatch(projectId, updates)
+  }
+
+  /**
+   * Persist a clip's trim window. Same batch path as reordering, so a trim and
+   * a reorder cannot race each other into two different writes.
+   */
+  const applyTrim = async (nodeId: string, inS: number | null, outS: number | null) => {
+    if (projectId === null) return
+    await patchCanvasNodeDataBatch(projectId, [{ nodeId, data: { in_s: inS, out_s: outS } }])
   }
 
   const removeFromReel = async (nodeId: string) => {
@@ -1845,6 +1855,7 @@ export function TimelinePanel({
                                   onArchive={() => archiveClip(n.id)}
                                   referDisabled={composer === null}
                                 />
+                                <TrimControls clip={n} onApply={applyTrim} />
                               </SortableClip>
                             )
                           })}

@@ -94,3 +94,69 @@
 .scrollbar-subtle::-webkit-scrollbar-corner {
   background: transparent;
 }
+
+/* --- Timeline trim controls -------------------------------------------- */
+/* In/out points on a reel clip. Compact by necessity: this sits under a card
+   in a horizontally-scrolling strip, so it must not change the clip's width. */
+.trim-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 7px 7px;
+  margin-top: 4px;
+  border: 1px solid rgb(38 48 66);
+  border-radius: 6px;
+  background: rgb(15 21 33);
+  font-size: 11px;
+}
+.trim-controls[data-trimmed='true'] {
+  border-color: rgb(232 163 61 / 0.5);
+}
+.trim-row { display: flex; gap: 6px; align-items: flex-end; }
+.trim-field { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.trim-field > span {
+  font-size: 9px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: rgb(100 116 139);
+}
+.trim-field input {
+  width: 100%;
+  min-width: 0;
+  padding: 3px 6px;
+  border-radius: 4px;
+  border: 1px solid rgb(38 48 66);
+  background: rgb(10 15 24);
+  color: rgb(232 237 246);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.trim-field input:focus-visible {
+  outline: 2px solid rgb(232 163 61);
+  outline-offset: 1px;
+  border-color: transparent;
+}
+.trim-note { margin: 0; color: rgb(154 168 189); font-size: 10px; line-height: 1.4; }
+.trim-note.trim-error { color: rgb(255 107 94); }
+.trim-note.trim-hint { color: rgb(100 116 139); font-style: italic; }
+.trim-actions { gap: 5px; }
+.trim-actions button {
+  flex: 1;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: rgb(232 163 61);
+  color: rgb(26 18 6);
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.trim-actions button.ghost {
+  background: transparent;
+  color: rgb(232 237 246);
+  border: 1px solid rgb(38 48 66);
+}
+.trim-actions button:disabled { opacity: 0.4; cursor: not-allowed; }
+.trim-actions button:not(:disabled):hover { filter: brightness(1.08); }

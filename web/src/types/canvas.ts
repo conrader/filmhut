@@ -145,6 +145,14 @@ export interface VideoResultData {
   duration: number
   aspect: string
   shot_id: number | null
+  /**
+   * Trim window into the source, in seconds. A clip is a VIEW of its file, not
+   * the whole of it — this is what lets a ten-second generation that is good
+   * for six seconds be cut rather than regenerated. Null or absent means the
+   * natural boundary.
+   */
+  in_s?: number | null
+  out_s?: number | null
   /** Soft-delete flag. See NoteData.archived. */
   archived?: boolean
   /** ISO timestamp stamped when archived. See NoteData.archived_at. */
