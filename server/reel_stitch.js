@@ -9,7 +9,8 @@ import { mkdtemp, rm, writeFile, stat, mkdir, copyFile, access, rename, unlink }
 import { tmpdir } from "os";
 import path from "path";
 import crypto from "crypto";
-import { buildConcatList, buildTrimFilter, planTrims } from "./lib/trim.js";
+import { buildConcatList, buildTrimFilter, planTrims, probeMedia } from "./lib/trim.js";
+import { DEFAULT_DURATION_S, DEFAULT_TRANSITION, buildTransitionFilter, planTransitions } from "./lib/transitions.js";
 
 export function selectReel(state) {
   return (state?.nodes || [])
@@ -230,6 +231,66 @@ async function resolveClipFile(node, projectDir) {
 // but writes to a caller-chosen path so the result can be cached.
 // Throws { code: "NO_SHOTS" } when the reel is empty,
 // { code: "FFMPEG_MISSING" } when the ffmpeg binary isn't on PATH.
+/**
+ * Render with dissolves between shots instead of hard cuts.
+ *
+ * Separate from buildReelMaster because it cannot share its fast path: blending
+ * two clips means decoding both, so a transitioned reel always re-encodes.
+ * Returns the plan alongside the file so a caller can report what the
+ * transitions did to the running time.
+ */
+export async function buildReelWithTransitions(
+  state, projectDir, outPath,
+  { transition = DEFAULT_TRANSITION, durationS = DEFAULT_DURATION_S, slug = "local" } = {},
+) {
+  const reel = selectReel(state);
+  if (!reel.length) {
+    const err = new Error("no shots to stitch");
+    err.code = "NO_SHOTS";
+    throw err;
+  }
+  if (reel.length === 1) {
+    // Nothing to transition between; fall back rather than fail.
+    return { ...(await buildReelMaster(state, projectDir, outPath, slug)), plan: null };
+  }
+
+  const clips = [];
+  for (const n of reel) {
+    const file = await resolveClipFile(n, projectDir);
+    const media = await probeMedia(file);
+    clips.push({
+      path: file,
+      duration: media.duration,
+      hasAudio: media.hasAudio,
+      in_s: n.data?.in_s ?? null,
+      out_s: n.data?.out_s ?? null,
+    });
+  }
+
+  const plan = planTransitions(clips, { transition, durationS });
+  await mkdir(path.dirname(outPath), { recursive: true });
+  const tmpOut = `${outPath}.${crypto.randomUUID()}.partial`;
+
+  try {
+    await runFfmpeg([
+      "-y",
+      ...clips.flatMap((c) => ["-i", c.path]),
+      "-filter_complex", buildTransitionFilter(clips, plan),
+      "-map", "[outv]", "-map", "[outa]",
+      ...H264_WEB_SAFE,
+      "-movflags", "+faststart",
+      "-f", "mp4",
+      tmpOut,
+    ]);
+    await rename(tmpOut, outPath);
+    const info = await stat(outPath);
+    return { path: outPath, size: info.size, plan };
+  } catch (e) {
+    await unlink(tmpOut).catch(() => {});
+    throw e;
+  }
+}
+
 export async function buildReelMaster(state, projectDir, outPath, slug = "local") {
   const reel = selectReel(state);
   if (!reel.length) {

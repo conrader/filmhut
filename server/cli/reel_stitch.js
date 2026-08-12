@@ -20,12 +20,16 @@ import path from "node:path";
 import { copyFile, stat } from "node:fs/promises";
 import { readFile } from "node:fs/promises";
 import { parseArgs, emitSuccess, emitFailure, classify, isoNow, PAI_REPO_ROOT } from "./_cli.js";
-import { stitchReel } from "../reel_stitch.js";
+import { stitchReel, buildReelWithTransitions } from "../reel_stitch.js";
 import { readActiveProject } from "../local_mirror.js";
 
 const args = parseArgs({
   out:      { type: "string", short: "o", default: "reel.mp4" },
   workflow: { type: "string", short: "w", default: "workflow.json" },
+  // Dissolves instead of hard cuts. Off by default: a transition forces a
+  // re-encode and shortens the reel, and neither should happen unasked.
+  transition:          { type: "string" },
+  "transition-length": { type: "string" },
 });
 
 // Active project's directory — local_path values in workflow.json
@@ -49,9 +53,21 @@ try {
 
 let cleanup = null;
 try {
-  const result = await stitchReel(state, projectBaseDir, "local");
-  cleanup = result.cleanup;
-  await copyFile(result.path, outPath);
+  let plan = null;
+  if (args.transition) {
+    // Transitions re-encode by necessity: blending two clips means decoding
+    // both, so there is no stream-copy path to fall back to here.
+    const built = await buildReelWithTransitions(state, projectBaseDir, outPath, {
+      transition: args.transition,
+      durationS: args["transition-length"] ? Number(args["transition-length"]) : undefined,
+      slug: "local",
+    });
+    plan = built.plan;
+  } else {
+    const result = await stitchReel(state, projectBaseDir, "local");
+    cleanup = result.cleanup;
+    await copyFile(result.path, outPath);
+  }
   const info = await stat(outPath);
   const reelCount = (state.nodes || []).filter(
     (n) => n.type === "video_result" && typeof n.data?.shot_id === "number"
@@ -61,6 +77,17 @@ try {
     size_bytes: info.size,
     shot_count: reelCount,
     generated_at: isoNow(),
+    ...(plan
+      ? {
+          transition: plan.transition,
+          transition_length_s: plan.durationS,
+          transitions_applied: plan.joins.length,
+          // A dissolve eats time. Report it rather than let it be discovered.
+          duration_s: plan.finalDurationS,
+          shortened_by_s: plan.shortenedByS,
+          ...(plan.skipped.length ? { hard_cuts: plan.skipped } : {}),
+        }
+      : {}),
   });
 } catch (e) {
   if (e.code === "NO_SHOTS") {

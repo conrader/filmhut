@@ -250,6 +250,9 @@ try {
       image_size: args["image-size"],
       generated_at: isoNow(),
       pending_job_id: jobId,
+      // What this node actually cost. Recorded here so project spend is a
+      // canvas read rather than a walk over ephemeral .results sidecars.
+      cost_usd: result.costUsd ?? null,
     },
     ...(args.subtype ? { subtype: args.subtype } : {}),
     ...(args.name ? { name: args.name } : {}),

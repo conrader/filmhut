@@ -348,6 +348,9 @@ try {
       // fps, snapped dimensions) — can differ from the requested params.
       effective_plan: effective,
       pending_job_id: jobId,
+      // What this node actually cost. Recorded here so project spend is a
+      // canvas read rather than a walk over ephemeral .results sidecars.
+      cost_usd: costUsd ?? null,
     },
   };
   // Merge audio source-ids into the --ref-source-id list so

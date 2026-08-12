@@ -213,6 +213,9 @@ try {
         ...(durationSec !== null ? { duration_sec: durationSec } : {}),
         generated_at: generatedAt,
         pending_job_id: jobId,
+      // What this node actually cost. Recorded here so project spend is a
+      // canvas read rather than a walk over ephemeral .results sidecars.
+      cost_usd: result.costUsd ?? null,
       },
     };
     const mutPayload = {
