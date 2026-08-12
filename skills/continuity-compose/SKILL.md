@@ -89,6 +89,43 @@ Before each generation, read the contract against the bibles and the reference p
 record the prompt actually used, the refs, the node id, and the reported cost in the ledger row.
 Never record a setting the CLI did not report.
 
+## Opening frames: anchor, or chain
+
+Every clip opens on an image. Which image you choose is the single biggest lever
+you have over how a sequence reads, and the two options fail in opposite
+directions.
+
+**Per-beat anchor — the default.** Compose a fresh opening frame for each beat
+from the character sheet with the image-edit model, showing that beat's staging,
+then animate it. Identity holds, because every shot re-reads the same face.
+Costs one cheap image per beat.
+
+**Chaining — optional, and for one job.** Extract a clip's last frame, bring it
+onto the canvas with `mirror_url.js --path <frame>`, and open the next clip on
+it. Use this to carry ONE continuous action past the model's clip ceiling — a
+move that must read as unbroken, where a cut would be wrong. It is not the
+default way to sequence a story.
+
+Chaining costs identity, and the cost compounds. Measured over a four-shot
+chain from one character sheet, palette agreement with the sheet fell 0.858 →
+0.708 → 0.654 → 0.059: by the fourth link the character was a different person
+in different clothes. Two links is usually safe, three is a risk, four is not.
+
+So: anchor per beat by default; chain only to extend a single continuous shot,
+and re-anchor as soon as the action allows.
+
+## Events need two shots
+
+A beat that turns on something *happening* — a light striking, a door opening, a
+face changing — cannot be one clip opened on a frame where it has already
+happened. The anchor fixes the end state, so the model plays a state rather than
+an event and the moment lands before the audience arrives.
+
+Split it: one shot in the before-state, one in the after, chained so the cut is
+continuous. Say the before-state explicitly and negatively in the first prompt
+("the lamp stays COLD AND UNLIT throughout"), because a prompt describing a
+strike will produce a strike.
+
 ## Inspecting a landed clip
 
 Run after PROJECT_AGENT.md § "Prompt alignment check" returns `pass`, and before anything that

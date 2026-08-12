@@ -1,6 +1,11 @@
 #!/usr/bin/env node
-// CLI to mirror an external URL into a canvas reference node so it can
-// be used as `--ref-source-id` for a later generation.
+// CLI to mirror an external URL — or a LOCAL FILE — into a canvas reference
+// node so it can be used as `--ref-source-id` for a later generation.
+//
+// The local-file path exists for shot chaining. Continuity between clips comes
+// from opening shot N+1 on shot N's last frame, and extract_frames.js writes
+// that frame to disk — but until a file is a canvas node it cannot be a ref,
+// so there was no way to close the loop without a public URL. Hence --path.
 //
 // Downloads the URL bytes, classifies the mime, and mints a node via the
 // same buildUploadedNodePayload path used by the browser upload route —
@@ -24,6 +29,7 @@ import { kickPreupload } from "./_preupload_hook.js";
 
 const args = parseArgs({
   url:                { type: "string", short: "u" },
+  path:               { type: "string" }, // local file; mutually exclusive with --url
   kind:               { type: "string" }, // override mime sniff (image|audio|video)
   label:              { type: "string" },
   "project-id":       { type: "string" },
@@ -35,8 +41,12 @@ function fail(klass, message, extra = {}) {
   emitFailure(klass, message, extra);
 }
 
-if (!args.url) {
-  fail("bad_args", "missing --url");
+if (!args.url && !args.path) {
+  fail("bad_args", "missing --url or --path");
+  process.exit(2);
+}
+if (args.url && args.path) {
+  fail("bad_args", "pass --url or --path, not both");
   process.exit(2);
 }
 
@@ -56,22 +66,44 @@ try {
   // remote host is unhealthy, not that the URL is wrong — classify it
   // transient so the agent retries instead of "fixing" a valid URL
   // (same 5xx→transient rule as pai_client.js).
-  let resp;
-  try {
-    resp = await fetch(args.url);
-  } catch (e) {
-    fail("bad_args", `fetch failed for ${args.url}: ${e.message}`);
-    process.exit(1);
+  let buf;
+  let mime;
+
+  if (args.path) {
+    // Local file: no network, and the extension is the only mime signal —
+    // sniffing bytes would be nicer but every producer here writes a known
+    // extension, and --kind overrides it anyway.
+    const abs = path.isAbsolute(args.path) ? args.path : path.resolve(process.cwd(), args.path);
+    try {
+      buf = await fs.readFile(abs);
+    } catch (e) {
+      fail("bad_args", `cannot read ${abs}: ${e.message}`);
+      process.exit(1);
+    }
+    const ext = path.extname(abs).slice(1).toLowerCase();
+    mime = ({
+      png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp",
+      mp4: "video/mp4", webm: "video/webm", mov: "video/quicktime",
+      mp3: "audio/mpeg", wav: "audio/wav", m4a: "audio/mp4",
+    })[ext] ?? "application/octet-stream";
+  } else {
+    let resp;
+    try {
+      resp = await fetch(args.url);
+    } catch (e) {
+      fail("bad_args", `fetch failed for ${args.url}: ${e.message}`);
+      process.exit(1);
+    }
+    if (!resp.ok) {
+      const klass = resp.status >= 500 ? "transient" : "bad_args";
+      fail(klass, `fetch failed for ${args.url}: ${resp.status} ${resp.statusText}`);
+      process.exit(1);
+    }
+    const ct = resp.headers.get("content-type") || "application/octet-stream";
+    // Strip "; charset=…" / "; boundary=…" suffixes for cleaner classify.
+    mime = ct.split(";")[0].trim().toLowerCase();
+    buf = Buffer.from(await resp.arrayBuffer());
   }
-  if (!resp.ok) {
-    const klass = resp.status >= 500 ? "transient" : "bad_args";
-    fail(klass, `fetch failed for ${args.url}: ${resp.status} ${resp.statusText}`);
-    process.exit(1);
-  }
-  const ct = resp.headers.get("content-type") || "application/octet-stream";
-  // Strip "; charset=…" / "; boundary=…" suffixes for cleaner classify.
-  const mime = ct.split(";")[0].trim().toLowerCase();
-  const buf = Buffer.from(await resp.arrayBuffer());
 
   // Kind resolution: explicit --kind override wins; otherwise sniff from
   // the response Content-Type via the same classifier the upload route uses.
@@ -89,11 +121,15 @@ try {
   // source_filename ends up as the URL's basename, mirroring the
   // drag-drop convention. Falls back to a stamp if the URL has no path.
   let originalName;
-  try {
-    const u = new URL(args.url);
-    originalName = path.basename(u.pathname) || `mirror_${Date.now()}`;
-  } catch {
-    originalName = `mirror_${Date.now()}`;
+  if (args.path) {
+    originalName = path.basename(args.path) || `mirror_${Date.now()}`;
+  } else {
+    try {
+      const u = new URL(args.url);
+      originalName = path.basename(u.pathname) || `mirror_${Date.now()}`;
+    } catch {
+      originalName = `mirror_${Date.now()}`;
+    }
   }
 
   // Measure image dimensions for the renderer's aspect_ratio hint
@@ -115,7 +151,10 @@ try {
     kind, textual: false, buf, mime, originalName, dims,
   });
   if (args.label) payload.data.label = args.label;
-  payload.data.metadata.source_url = args.url;
+  // Provenance: where this asset came from, so a chained frame is traceable
+  // back to the clip it was lifted out of.
+  if (args.url) payload.data.metadata.source_url = args.url;
+  else payload.data.metadata.source_path = args.path;
 
   // Stage bytes to assets/.tmp/; mutator renames into assets/<bucket>/<node>.<ext>.
   const staged = await writeBytesToTmp({ bytes: buf, mimeType: mime, projectId });

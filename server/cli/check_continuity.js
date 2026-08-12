@@ -56,9 +56,26 @@ try {
     // frame is the one thing that reliably misses it.
     fs.mkdirSync(tmpDir, { recursive: true });
     const pattern = path.join(tmpDir, "f_%03d.jpg");
+
+    // Sample ACROSS the clip, not out of its opening. A fixed fps filter plus
+    // -frames:v N only ever reaches N/fps seconds in — on a 30s reel that was
+    // the first 8 seconds, so two films sharing an opening shot scored
+    // identically and a collapse in the final shot was invisible. Derive the
+    // rate from the real duration instead.
+    let duration = 0;
+    try {
+      const { stdout } = await run("ffprobe", [
+        "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", target,
+      ]);
+      duration = Number(String(stdout).trim()) || 0;
+    } catch { /* fall through to the whole-clip default below */ }
+
+    // One frame per interval, offset half an interval so the first sample is
+    // inside the first segment rather than on the very first frame.
+    const interval = duration > 0 ? duration / frameCount : 1;
     await run("ffmpeg", [
       "-y", "-i", target,
-      "-vf", `fps=1/${Math.max(1, Math.floor(8 / frameCount))},scale=320:-1`,
+      "-vf", `fps=${(1 / interval).toFixed(6)},scale=320:-1`,
       "-frames:v", String(frameCount),
       pattern,
     ], { maxBuffer: 16 * 1024 * 1024 });

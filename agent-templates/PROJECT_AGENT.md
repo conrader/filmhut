@@ -123,7 +123,7 @@ Do not use `node server/cli/...` from a project cwd or hardcode relative repo pa
 | `check_continuity.js` | `continuity-compose` | Free local continuity signal: palette, exposure and composition agreement between an asset and its references. Flags: `--path`, `--ref` (repeatable), `--frames N`. Reports `identity_checked: false` — it does NOT verify a character is the same person. |
 | `resume_jobs.js` | none | Lists paid jobs left behind by an interrupted process; `--poll` collects anything that finished. Free. |
 | `upscaler.js` | none | Paid 4K video upscaling from an existing canvas source. Uses provider estimate from `upscale-create`. |
-| `mirror_url.js` | none | Mirrors an external image/audio/video URL into a canvas reference node. Flags: `--url`, optional `--kind <image|audio|video>`, `--label`. |
+| `mirror_url.js` | none | Brings an external URL **or a local file** onto the canvas as a reference node. Flags: `--url` or `--path`, optional `--kind <image\|audio\|video>`, `--label`. `--path` is what makes shot chaining possible: an extracted boundary frame has to be a node before it can be a `--ref-source-id`. |
 | `split_image.js` | none | Slices an image into grid tiles. Flags: `--url`, `--cols`, `--rows`, `--source-node-id`; `cols` and `rows` each integer 1-8; `1x1` rejected. |
 | `extract_frames.js` | none | Free local frame sampler for video alignment checks. Flags: `--path <video>`, `--count N` (default 5), `--max-width` (default 1280). Writes JPEGs under `assets/.tmp/frames/` and prints their paths. |
 | `switch_project.js` | none | Lists or activates projects. See § Projects. |
