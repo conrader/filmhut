@@ -18,7 +18,14 @@ export const MUSIC_LIMITS = {
   minSeconds: 10,
   maxSeconds: 300,
   maxGuidance: 1,
+  // AceStep_1_5_Turbo pins steps to 8. The gating limits live under
+  // info.limits.min_steps/max_steps — note the name mismatch with the
+  // inference_steps request field.
+  defaultSteps: 8,
 };
+
+/** deAPI requires lyrics and rejects an empty value; this is its own sentinel for an instrumental. */
+export const INSTRUMENTAL = "[Instrumental]";
 
 export function clampDuration(seconds) {
   const n = Number(seconds);
@@ -36,7 +43,9 @@ export function clampDuration(seconds) {
  * @param {Function} [opts.onSubmitted] called with the provider id before polling
  * @returns {Promise<{ url: string, model: string, durationSeconds: number, costUsd: number|null }>}
  */
-export async function generateMusic({ prompt, duration, guidanceScale, onSubmitted } = {}) {
+export async function generateMusic({
+  prompt, duration, guidanceScale, lyrics, format = "mp3", steps, onSubmitted,
+} = {}) {
   const text = String(prompt ?? "").trim();
   if (text.length < 3) {
     throw err("bad_args", "generateMusic needs a style brief — genre, instrumentation, mood");
@@ -55,11 +64,23 @@ export async function generateMusic({ prompt, duration, guidanceScale, onSubmitt
     Number.isFinite(Number(guidanceScale)) ? Number(guidanceScale) : MUSIC_LIMITS.maxGuidance,
   );
 
-  const fields = { prompt: text, model, duration: seconds, guidance_scale: guidance, seed: -1 };
+  // Field names are deAPI's, not ours: it wants `caption` rather than `prompt`,
+  // and it REQUIRES lyrics, inference_steps and format — omitting any of them
+  // is a 422 rather than a default.
+  const fields = {
+    caption: text,
+    model,
+    lyrics: String(lyrics ?? "").trim() || INSTRUMENTAL,
+    duration: seconds,
+    inference_steps: Number.isFinite(Number(steps)) ? Number(steps) : MUSIC_LIMITS.defaultSteps,
+    guidance_scale: guidance,
+    seed: -1,
+    format,
+  };
 
   let costUsd = null;
   try {
-    costUsd = await quotePrice({ path: `${RESOURCE}/price`, body: fields, logTag: "deapi-music" });
+    costUsd = await quotePrice({ path: RESOURCE, body: fields, logTag: "deapi-music" });
   } catch {
     // A missing quote is not worth failing the call over; the result reports
     // whatever the provider actually charged.

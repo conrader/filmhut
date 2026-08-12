@@ -52,7 +52,6 @@ try {
   const result = await transcribe({
     filePath,
     diarize: Boolean(args.diarize),
-    language: args.language,
     onSubmitted: (ref) => recordProviderRef(jobId, ref),
   });
 

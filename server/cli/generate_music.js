@@ -7,6 +7,7 @@
 // bed rather than as a clip.
 //
 //   node generate_music.js --prompt "sparse low strings, storm, unresolved" --duration 90
+//   node generate_music.js --prompt "folk ballad, acoustic" --lyrics "She waited by the shore"
 //
 // Prints one JSON line. Non-zero exit on failure.
 
@@ -23,6 +24,9 @@ const args = parseArgs({
   prompt:            { type: "string", short: "p" },
   duration:          { type: "string", short: "d" },
   "guidance-scale":  { type: "string" },
+  lyrics:            { type: "string" },
+  steps:             { type: "string" },
+  format:            { type: "string" },
   label:             { type: "string" },
   "source-node-id":  { type: "string" },
   "project-id":      { type: "string" },
@@ -60,6 +64,11 @@ try {
     prompt: args.prompt,
     duration,
     guidanceScale: args["guidance-scale"] === undefined ? undefined : Number(args["guidance-scale"]),
+    // deAPI requires lyrics and refuses an empty value; the client defaults to
+    // its instrumental sentinel when none is given.
+    lyrics: args.lyrics,
+    steps: args.steps === undefined ? undefined : Number(args.steps),
+    format: args.format || "mp3",
     // Durable before the first poll — see cli/_resume.js.
     onSubmitted: (ref) => recordProviderRef(jobId, ref),
   });

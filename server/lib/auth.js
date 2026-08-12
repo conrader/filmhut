@@ -26,7 +26,9 @@ const TOKEN_BYTES = 32;
 //   /            — health probe; reveals nothing but liveness
 //   /session     — exchanges a token for the cookie, so it must be reachable
 //                  before one exists
-const PUBLIC_PATHS = new Set(["/", "/session"]);
+// /healthz is what compose and k8s probe; a liveness check that needs a secret
+// restart-loops the container.
+const PUBLIC_PATHS = new Set(["/", "/healthz", "/session"]);
 
 /** Loopback callers are exempt: the CLIs run as the same user on the same box. */
 const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
@@ -110,10 +112,32 @@ export function isLoopback(req) {
  */
 export function createAuthMiddleware({ token, allowLoopback = true }) {
   return function authMiddleware(req, res, next) {
+    const presented = presentedToken(req);
+
+    // Mint the cookie BEFORE any short-circuit. The launch URL lands on "/",
+    // which is public — so if this ran after the public-path check it would
+    // never fire on the one request that needs it, and every asset the shell
+    // references would 401. A browser cannot attach a token to a <script src>
+    // or a <video src>, so the cookie is the only carrier those requests have.
+    const fromQuery = req.query?.token ?? req.query?.t;
+    if (
+      typeof fromQuery === "string" && fromQuery !== ""
+      && tokenMatches(token, fromQuery)
+      && typeof res.cookie === "function"
+    ) {
+      res.cookie(TOKEN_COOKIE, fromQuery, {
+        httpOnly: true,
+        sameSite: "lax",
+        secure: Boolean(req.secure),
+        path: "/",
+        maxAge: 30 * 24 * 60 * 60 * 1000,
+      });
+    }
+
     if (PUBLIC_PATHS.has(req.path)) return next();
     if (allowLoopback && isLoopback(req)) return next();
 
-    if (tokenMatches(token, presentedToken(req))) return next();
+    if (tokenMatches(token, presented)) return next();
 
     // A browser navigating gets a page it can act on; anything else gets JSON.
     if (String(req.headers.accept ?? "").includes("text/html")) {

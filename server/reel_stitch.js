@@ -104,22 +104,15 @@ export async function stitchReel(state, projectDir, slug = "local") {
       files.push(dst);
     }
 
-    const listPath = path.join(dir, "list.txt");
-    await writeFile(listPath, buildConcatList(plan.clips), "utf8");
-
-    const outPath = path.join(dir, "out.mp4");
-
-    // The concat demuxer builds ONE audio decoder from the first file and
-    // reuses it for the rest, so clips that differ in sample rate decode to
-    // garbage — and it does that WITHOUT failing, so the copy path below
-    // "succeeds" and silently ships a corrupt track. That combination is
-    // routine here: audio-synced dialogue clips come back at 24kHz while
-    // plain generated clips are 48kHz, so any reel mixing the two was
-    // affected. Probe first and force the re-encode path when they disagree.
-    // planTrims subsumes the old sample-rate probe and adds the check that
-    // whole-clip concat never needed: whether a requested cut lands on a
-    // keyframe. Stream copy cannot cut mid-GOP, so a trim that does not align
-    // must re-encode or it silently ships the wrong footage.
+    // planTrims must run BEFORE the concat list is written — the list carries
+    // the per-clip trim points it computes.
+    //
+    // It subsumes the old sample-rate probe: the concat demuxer builds ONE
+    // audio decoder from the first file and reuses it, so clips differing in
+    // sample rate decode to garbage WITHOUT failing, and the copy path
+    // "succeeds" while shipping a corrupt track. It adds the check whole-clip
+    // concat never needed: whether a cut lands on a keyframe, since stream
+    // copy cannot cut mid-GOP.
     const plan = await planTrims(
       files.map((f, i) => ({
         path: f,
@@ -127,6 +120,11 @@ export async function stitchReel(state, projectDir, slug = "local") {
         out_s: reel[i]?.data?.out_s ?? null,
       })),
     );
+    const listPath = path.join(dir, "list.txt");
+    await writeFile(listPath, buildConcatList(plan.clips), "utf8");
+
+    const outPath = path.join(dir, "out.mp4");
+
     const uniformAudio = plan.mode === "copy";
     if (plan.mode !== "copy") {
       console.warn(`[stitch ${slug}] re-encoding: ${plan.reasons.join("; ")}`);

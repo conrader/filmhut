@@ -34,6 +34,7 @@ async function appWith({ allowLoopback = false } = {}) {
   app.post("/projects/:id/mutate", (_req, res) => res.json({ ok: true, applied: true }));
   // Deliberately added with no thought given to auth — the point of the test.
   app.get("/some/route/nobody/guarded", (_req, res) => res.json({ ok: true }));
+  app.get("/healthz", (_req, res) => res.json({ ok: true }));
 
   const server = app.listen(0);
   await new Promise((r) => server.once("listening", r));
@@ -218,4 +219,56 @@ test("generated tokens are unique and url-safe", () => {
   const b = generateToken();
   assert.notEqual(a, b);
   assert.match(a, /^[A-Za-z0-9_-]+$/, "must survive a query string without escaping");
+});
+
+test("a query token mints the cookie, so the browser can load the bundle", async () => {
+  // The failure this prevents: the launch URL carries ?token=, the shell loads,
+  // and then every asset the shell references 401s because a <script src> and a
+  // <link rel=stylesheet> cannot attach a token. The page goes blank and the
+  // user has no idea why.
+  const { base, close } = await appWith();
+  try {
+    const res = await fetch(`${base}/projects?token=${TOKEN}`, { redirect: "manual" });
+    assert.equal(res.status, 200);
+    const setCookie = res.headers.get("set-cookie") ?? "";
+    assert.match(setCookie, new RegExp(`${TOKEN_COOKIE}=`), "entering with a query token must leave a cookie behind");
+    assert.match(setCookie, /HttpOnly/i);
+  } finally {
+    await close();
+  }
+});
+
+test("a wrong query token mints nothing", async () => {
+  const { base, close } = await appWith();
+  try {
+    const res = await fetch(`${base}/projects?token=nope`);
+    assert.equal(res.status, 401);
+    assert.equal(res.headers.get("set-cookie"), null, "a failed attempt must not leave a usable cookie");
+  } finally {
+    await close();
+  }
+});
+
+test("a header token does NOT mint a cookie", async () => {
+  // Programmatic callers carry their own credential; handing them a session
+  // cookie would widen the surface for no benefit.
+  const { base, close } = await appWith();
+  try {
+    const res = await fetch(`${base}/projects`, { headers: { authorization: `Bearer ${TOKEN}` } });
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get("set-cookie"), null);
+  } finally {
+    await close();
+  }
+});
+
+test("/healthz stays reachable for a container probe", async () => {
+  const { base, close } = await appWith();
+  try {
+    // A liveness probe that needs the secret restart-loops the container.
+    const res = await fetch(`${base}/healthz`);
+    assert.notEqual(res.status, 401);
+  } finally {
+    await close();
+  }
 });

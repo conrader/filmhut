@@ -11,7 +11,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { buildReelMaster } from "../reel_stitch.js";
+import { buildReelMaster, stitchReel } from "../reel_stitch.js";
 import { probeMedia } from "../lib/trim.js";
 
 const run = promisify(execFile);
@@ -113,5 +113,43 @@ describe("reel export honours trim windows", { skip: !ffmpegAvailable }, () => {
     await buildReelMaster(state, projectDir, out, "test");
     const info = await probeMedia(out);
     assert.ok(info.duration > 2.5, "an explicit null must not truncate the clip");
+  });
+});
+
+// stitchReel is the OTHER exporter — bound to GET /projects/:id/reel.mp4, the
+// CLI, and the upscale source path. It had no test calling it with real
+// arguments, which is exactly how a reference-before-declaration error in it
+// survived a green suite. These call it for real.
+describe("stitchReel — the download path a user actually hits", { skip: !ffmpegAvailable }, () => {
+  test("it runs at all, which a green suite previously did not prove", async () => {
+    await makeClip("assets/videos/s1.mp4", 3);
+    const state = { nodes: [videoNode("video_1", "assets/videos/s1.mp4", 1)] };
+    const out = await stitchReel(state, projectDir, "test");
+    try {
+      assert.ok(out.size > 0, "the export must produce bytes");
+      const info = await probeMedia(out.path);
+      assert.ok(Math.abs(info.duration - 3) < 0.4, `expected ~3s, got ${info.duration.toFixed(2)}s`);
+    } finally {
+      await out.cleanup?.();
+    }
+  });
+
+  test("it honours trim windows too, not just its sibling", async () => {
+    await makeClip("assets/videos/s2.mp4", 6);
+    await makeClip("assets/videos/s3.mp4", 6);
+    const state = { nodes: [
+      videoNode("video_1", "assets/videos/s2.mp4", 1, { in_s: 3, out_s: 5 }),
+      videoNode("video_2", "assets/videos/s3.mp4", 2, { in_s: 1, out_s: 3 }),
+    ] };
+    const out = await stitchReel(state, projectDir, "test");
+    try {
+      const info = await probeMedia(out.path);
+      assert.ok(
+        Math.abs(info.duration - 4) < 0.5,
+        `expected ~4s from two 2s windows, got ${info.duration.toFixed(2)}s`,
+      );
+    } finally {
+      await out.cleanup?.();
+    }
   });
 });

@@ -94,3 +94,60 @@ test("the README's promises now have code behind them", async () => {
     assert.ok(getDefault("transcription"), "README advertises transcription; the registry must back it");
   }
 });
+
+// The wire contract, verified against deAPI's published spec (llms.txt). These
+// exist because the first version of both clients sent field names deAPI does
+// not accept, which typechecked, tested green, and would have 422'd on the
+// first real call.
+
+async function captureForm(fn) {
+  const original = globalThis.fetch;
+  const seen = [];
+  globalThis.fetch = async (url, init) => {
+    seen.push({ url: String(url), body: init?.body });
+    throw new Error('captured');
+  };
+  try { await fn().catch(() => {}); } finally { globalThis.fetch = original; }
+  return seen;
+}
+
+test("music sends every field deAPI marks required", async () => {
+  process.env.DEAPI_KEY = process.env.DEAPI_KEY || '1|x';
+  const { generateMusic } = await import("../pai_music_client.js");
+  const seen = await captureForm(() => generateMusic({ prompt: "sparse low strings", duration: 90 }));
+  const form = seen.find((s) => s.body instanceof FormData);
+  assert.ok(form, "a multipart submit should have been attempted");
+  const keys = [...form.body.keys()].sort();
+  for (const required of ["caption", "model", "lyrics", "duration", "inference_steps", "guidance_scale", "seed", "format"]) {
+    assert.ok(keys.includes(required), `deAPI requires "${required}"; sent: ${keys.join(", ")}`);
+  }
+  assert.ok(!keys.includes("prompt"), 'deAPI wants "caption", not "prompt"');
+  assert.equal(form.body.get("lyrics"), "[Instrumental]", "lyrics may not be empty");
+});
+
+test("the price endpoint is not double-suffixed", async () => {
+  process.env.DEAPI_KEY = process.env.DEAPI_KEY || '1|x';
+  const { generateMusic } = await import("../pai_music_client.js");
+  const seen = await captureForm(() => generateMusic({ prompt: "abc", duration: 30 }));
+  const priced = seen.find((s) => s.url.includes("/price"));
+  assert.ok(priced, "a quote should be attempted");
+  assert.ok(!priced.url.includes("/price/price"), `quotePrice appends /price itself: ${priced.url}`);
+  assert.match(priced.url, /audio\/music\/price$/);
+});
+
+test("transcription uses source_file and include_ts, and has no diarization field", async () => {
+  process.env.DEAPI_KEY = process.env.DEAPI_KEY || '1|x';
+  const { transcribe } = await import("../pai_transcribe_client.js");
+  const { writeFileSync, mkdtempSync } = await import("node:fs");
+  const os = await import("node:os");
+  const tmp = path.join(mkdtempSync(path.join(os.tmpdir(), "stt-")), "a.mp3");
+  writeFileSync(tmp, Buffer.from([0x49, 0x44, 0x33]));
+
+  const seen = await captureForm(() => transcribe({ filePath: tmp }));
+  const form = seen.find((s) => s.body instanceof FormData);
+  assert.ok(form, "a multipart submit should have been attempted");
+  const keys = [...form.body.keys()].sort();
+  assert.ok(keys.includes("source_file"), `deAPI wants "source_file", not "file"; sent: ${keys.join(", ")}`);
+  assert.ok(keys.includes("include_ts"), 'deAPI wants "include_ts", not "timestamps"');
+  assert.ok(!keys.includes("diarization"), "diarization is a model capability, not a request field");
+});

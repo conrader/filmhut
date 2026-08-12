@@ -18,25 +18,36 @@ const POLL_TIMEOUT_MS = 15 * 60_000;
  *
  * @param {object}   opts
  * @param {string}   opts.filePath      absolute path to the media
- * @param {boolean}  [opts.diarize]     label distinct speakers
+ * @param {boolean}  [opts.diarize]     require a model that labels speakers
  * @param {string}   [opts.language]    ISO code; omit to let the model detect
  * @param {Function} [opts.onSubmitted] called with the provider id before polling
  * @returns {Promise<{ text: string, segments: Array, model: string, costUsd: number|null }>}
  */
-export async function transcribe({ filePath, diarize = false, language, onSubmitted } = {}) {
+export async function transcribe({ filePath, diarize = false, onSubmitted } = {}) {
   if (!filePath || !fs.existsSync(filePath)) {
     throw err("bad_args", `transcribe: no file at ${filePath ?? "(no path given)"}`);
   }
 
   const model = getDefault("transcription")?.deapi_slug;
   if (!model) throw err("bad_args", "no transcription model configured — set DEAPI_TRANSCRIBE_MODEL");
+  // Diarization is chosen by model, not by parameter. Say so rather than
+  // letting a caller believe a flag did something.
+  if (diarize && !/Ct2$/i.test(model)) {
+    throw err(
+      "bad_args",
+      `speaker labels need a diarizing model; ${model} does not offer them — set DEAPI_TRANSCRIBE_MODEL=WhisperLargeV3Ct2`,
+    );
+  }
 
-  const fields = { model, timestamps: true, diarization: Boolean(diarize) };
-  if (typeof language === "string" && language) fields.language = language;
+  // deAPI's names, not ours. `include_ts` rather than `timestamps`, and there
+  // is NO diarization request field — diarization is a property of the model
+  // you pick (WhisperLargeV3Ct2 is the one that offers it), so asking for it
+  // here would be silently ignored at best.
+  const fields = { model, include_ts: true };
 
   let costUsd = null;
   try {
-    costUsd = await quotePrice({ path: `${RESOURCE}/price`, body: fields, logTag: "deapi-stt" });
+    costUsd = await quotePrice({ path: RESOURCE, body: fields, logTag: "deapi-stt" });
   } catch {
     // Priced by duration, which the quote endpoint cannot know without the
     // file; a missing quote is expected here rather than exceptional.
@@ -45,7 +56,8 @@ export async function transcribe({ filePath, diarize = false, language, onSubmit
   const submitted = await postForm({
     path: RESOURCE,
     fields,
-    files: [{ field: "file", filePath }],
+    // The upload field is `source_file`; `file` is rejected as missing source.
+    files: [{ field: "source_file", filePath }],
     timeoutMs: SUBMIT_TIMEOUT_MS,
     logTag: "deapi-stt",
   });
