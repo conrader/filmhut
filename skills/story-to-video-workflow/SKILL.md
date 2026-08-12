@@ -43,6 +43,7 @@ Plan ahead internally, but only ask the next meaningful user-facing choice; the 
 | Narration, dialogue read, character voice, or audio node | `voice-compose` |
 | Clip render, continuation, audio refs, storyboard animation, or video prompt | `video-compose` |
 | Scene/ref grouping or canvas layout frames | `groups-compose` |
+| Multi-clip identity/prop/location/style/audio consistency, seam checks, or repairing one clip in an approved sequence | `continuity-compose` |
 
 Capability skills own CLI flags, node grammar, refs, and recovery hints. `PROJECT_AGENT.md` owns shared failure handling.
 

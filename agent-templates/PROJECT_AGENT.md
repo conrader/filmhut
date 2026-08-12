@@ -18,6 +18,7 @@ Before any media-generation command, load the matching skill in the current turn
 | design a character voice, dialogue read, or narration/VO track (`generate_voice.js`) | `voice-compose` |
 | generate, animate, continue, restyle, edit, or render a video clip (`generate_video.js`) | `video-compose` |
 | group canvas nodes into scenes, act beats, or reference sets | `groups-compose` |
+| keep a character, prop, location, style, or sound consistent across several clips, check a clip against its neighbours, or repair one clip in an approved sequence | `continuity-compose` |
 
 Inline recipes below cover only tiny operations: summarize the canvas and take a note.
 

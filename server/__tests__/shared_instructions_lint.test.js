@@ -31,6 +31,7 @@ const FORBIDDEN_SLASH_COMMANDS = [
   "voice-compose",
   "script-compose",
   "groups-compose",
+  "continuity-compose",
 ];
 
 const STALE_SHARED_GUIDANCE = [
