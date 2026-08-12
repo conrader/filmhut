@@ -22,17 +22,36 @@ The upstream README is preserved verbatim at [`docs/UPSTREAM_README.md`](docs/UP
 
 ---
 
+## Get your deAPI key
+
+You bring your own key — **no key ships with this repo**, and none ever should.
+
+1. Sign up at **[app.deapi.ai](https://app.deapi.ai)**. New accounts get **$5 in free credits**, which is enough for roughly 90 ten-second clips or several hundred images.
+2. Go to **[Dashboard → API keys](https://app.deapi.ai/dashboard/api-keys)** and create a key. It looks like `12345|AbCdEf0123…` — an id, a pipe, then the secret.
+3. Copy it now: deAPI shows the secret **once**.
+4. Put it in your local `.env`:
+
+```bash
+cp .env.example .env
+```
+
+```bash
+# .env  — QUOTE THE VALUE
+DEAPI_KEY='12345|AbCdEf0123…'
+```
+
+> **The quotes are load-bearing.** deAPI keys contain a `|`, and `scripts/start.sh` sources `.env` as a shell file — unquoted, the shell reads that pipe as a pipeline and the boot dies with `command not found`. Single quotes fix it, and the dotenv parser strips them, so both readers agree.
+
+`.env` is in `.gitignore` and must stay there. Never commit a key, never paste one into an issue, and if one leaks, revoke it in the dashboard immediately — it is a live billing credential. Top up or watch spend on the same dashboard.
+
 ## Quick start
 
 ```bash
-cp .env.example .env          # then set DEAPI_KEY (quote it — see below)
 node scripts/deapi-doctor.mjs # free preflight: key, balance, models, live prices
 ./scripts/start.sh            # http://localhost:7443
 ```
 
-Get a key at [app.deapi.ai/dashboard/api-keys](https://app.deapi.ai/dashboard/api-keys) — new accounts get $5 free.
-
-> **Quote the key.** deAPI keys are Laravel tokens shaped `12345|abcdef…`. `start.sh` sources `.env` as shell, so an unquoted `|` is parsed as a pipeline and kills the boot. Write `DEAPI_KEY='12345|abcdef…'`.
+`deapi-doctor.mjs` costs nothing and tells you immediately whether the key works, what it can see, and what a call will cost. Run it before anything else.
 
 **No tunnel required.** Upstream needed a Cloudflare tunnel so the provider could fetch reference files over a public URL. deAPI takes references as direct multipart uploads, so generation works with no tunnel at all.
 
