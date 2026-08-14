@@ -360,6 +360,28 @@ try {
     ...args,
     "ref-source-id": [...refSourcesArg, ...audSrcIds],
   };
+  // A video anchored on a one-off portrait has ONE viewpoint to work from, so
+  // any angle the portrait does not show gets invented — which is where
+  // identity drifts. A four-panel sheet (reference_sheet.js) triangulates
+  // front, profile, back and a face close-up. Say so rather than assume the
+  // caller has read the skill.
+  let anchorAdvice = null;
+  try {
+    const wf = JSON.parse(await fs.readFile("workflow.json", "utf8"));
+    const byId = new Map((wf.nodes ?? []).map((n) => [n.id, n]));
+    const weak = refSourcesArg
+      .map((id) => byId.get(id))
+      .filter((n) => n?.type === "image_result" && n.data?.subtype !== "character");
+    if (weak.length > 0) {
+      anchorAdvice =
+        `anchored on ${weak.map((n) => n.id).join(", ")}, which ${weak.length === 1 ? "is not a" : "are not"} character sheet${weak.length === 1 ? "" : "s"}. `
+        + "A single image gives the model one viewpoint and it invents the rest; "
+        + 'build a multi-angle sheet with reference_sheet.js --kind character to hold identity across shots.';
+    }
+  } catch {
+    // No workflow.json, or unreadable — advice is a nicety, never a blocker.
+  }
+
   const mutResult = await postNodeAddBatch({
     args: argsForMutate,
     type: "video_result",
@@ -408,6 +430,7 @@ try {
     generated_at: generatedAt,
   };
   if (mutResult) Object.assign(payload, mutResult);
+  if (anchorAdvice) payload.anchor_advice = anchorAdvice;
 
   emitted = emitSuccess(payload);
 } catch (e) {
