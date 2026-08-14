@@ -137,12 +137,16 @@ if (!args["allow-unreferenced"]) {
       fs.readFile("workflow.json", "utf8"),
       fs.readFile("subjects.json", "utf8").catch(() => '{"subjects":[]}'),
     ]);
-    const byId = new Map((JSON.parse(wfRaw).nodes ?? []).map((n) => [n.id, n]));
+    const wfDoc = JSON.parse(wfRaw);
+    const byId = new Map((wfDoc.nodes ?? []).map((n) => [n.id, n]));
     const subjects = JSON.parse(subjRaw).subjects ?? [];
     const { blocked } = checkSubjectCoverage({
       prompt: args.prompt,
       subjects,
       refNodes: refSourcesArg.map((id) => byId.get(id)),
+      // A video ref is a FRAME, not a subject reference. A prop reaches a clip
+      // through the anchor, so lineage is what coverage means here.
+      edges: wfDoc.edges ?? [],
     });
     if (blocked) {
       fail("bad_args", blocked);

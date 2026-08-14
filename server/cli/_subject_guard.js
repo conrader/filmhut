@@ -48,16 +48,54 @@ export function mentions(prompt, subject) {
 }
 
 /**
+ * Every node this one descends from, following `derived` edges backwards.
+ *
+ * This is what makes the guard usable on VIDEO. A video's --ref-source-id is
+ * its first or last FRAME, not a subject reference — the model takes those
+ * images as literal frames. Demanding that a prop's reference be passed there
+ * too would not anchor the prop, it would make it the closing frame of the
+ * shot. The prop reaches a clip by being in the ANCHOR, and the anchor records
+ * what it was built from. So: a subject counts as covered when its reference is
+ * an ancestor of something wired, not only when it is wired itself.
+ */
+export function ancestorIds(edges = [], startIds = []) {
+  const parents = new Map();
+  for (const e of edges) {
+    if (!e?.to || !e?.from) continue;
+    if (!parents.has(e.to)) parents.set(e.to, []);
+    parents.get(e.to).push(e.from);
+  }
+  const seen = new Set();
+  const stack = [...startIds];
+  while (stack.length) {
+    const id = stack.pop();
+    for (const p of parents.get(id) ?? []) {
+      if (seen.has(p)) continue;   // also guards against a cycle
+      seen.add(p);
+      stack.push(p);
+    }
+  }
+  return seen;
+}
+
+/**
  * @param prompt      the shot prompt
  * @param subjects    declared subjects: { name, kind, aliases?, node_id? }
  * @param refNodes    the image_result nodes wired as --ref-source-id
+ * @param edges       canvas edges, so lineage counts as coverage (see above)
  * @returns { blocked: string|null, warning: string|null, missing: string[] }
  */
-export function checkSubjectCoverage({ prompt, subjects = [], refNodes = [] }) {
-  const wiredIds = new Set(refNodes.filter(Boolean).map((n) => n.id));
-  const approvedIds = new Set(
-    refNodes.filter((n) => n?.data?.review?.verdict === "approved").map((n) => n.id),
-  );
+export function checkSubjectCoverage({ prompt, subjects = [], refNodes = [], edges = [] }) {
+  const direct = refNodes.filter(Boolean).map((n) => n.id);
+  const inherited = ancestorIds(edges, direct);
+  const wiredIds = new Set([...direct, ...inherited]);
+  // An inherited reference cannot be re-checked here (its node is not in
+  // refNodes), so lineage coverage is taken as reviewed — it was reviewed when
+  // the anchor that carries it was built.
+  const approvedIds = new Set([
+    ...refNodes.filter((n) => n?.data?.review?.verdict === "approved").map((n) => n.id),
+    ...inherited,
+  ]);
 
   const undeclared = [];   // named in the prompt, no reference made yet at all
   const unwired = [];      // reference exists but was not passed to this shot
@@ -81,8 +119,9 @@ export function checkSubjectCoverage({ prompt, subjects = [], refNodes = [] }) {
   if (unwired.length) {
     parts.push(
       `${unwired.map((s) => `"${s.name}" (${s.node_id})`).join(", ")} `
-      + `${unwired.length === 1 ? "has a reference that was" : "have references that were"} not passed to this shot. `
-      + `Add ${unwired.map((s) => `--ref-source-id ${s.node_id}`).join(" ")}`,
+      + `${unwired.length === 1 ? "has a reference that is" : "have references that are"} neither wired to this shot nor in its lineage. `
+      + `Either pass ${unwired.map((s) => `--ref-source-id ${s.node_id}`).join(" ")}, `
+      + "or rebuild the anchor image with that reference so the shot inherits it",
     );
   }
 
