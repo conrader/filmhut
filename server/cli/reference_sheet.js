@@ -8,6 +8,32 @@
 //   node reference_sheet.js --name "the brass compass" --kind item \
 //     --description "palm-sized tarnished brass, chipped blue-enamel star on the lid"
 //
+//   node reference_sheet.js --name "the telegraph key" --kind item --single \
+//     --description "flat lever on a round brass base, black ebonite knob"
+//
+// EVERY REUSED OBJECT NEEDS ONE OF THESE, NOT JUST EVERY FACE.
+//
+// A prop that appears in more than one shot drifts exactly like a face does,
+// and for the same reason: nothing anchors it, so each shot invents it again.
+// In one piece the hero prop — a telegraph key on a desk, present in five of
+// six shots — was described in prose in each prompt and never given a
+// reference. It came back as a different object in the first shot from the
+// other four, and as a ring-topped ornament rather than a telegraph key in all
+// of them. Nobody had drawn it; five prompts had each guessed.
+//
+// So the rule is: if it appears twice, it gets a reference. Props, vehicles,
+// signage, an animal, a distinctive garment worn by someone off-sheet.
+//
+// --single IS A FIRST-CLASS OPTION, NOT A FAILURE MODE.
+//
+// The four-panel sheet is the better anchor when it works. It does not always
+// work: for a small rigid instrument the model has no confident idea of, four
+// panels means four chances to disagree, and three attempts at that telegraph
+// key produced three sheets whose own panels contradicted each other. One
+// carefully composed view of an object the model renders CONSISTENTLY beats
+// four views of an object it renders four ways. Reach for --single when the
+// subject is small, rigid, and unlikely to be well known by name.
+//
 // WHY THIS EXISTS AS A COMMAND
 //
 // A single portrait gives a video model one viewpoint. Asked for a shot from
@@ -34,6 +60,7 @@ const args = parseArgs({
   "request-id":      { type: "string" },
   "no-canvas-write": { type: "boolean" },
   print:             { type: "boolean" },  // emit the prompt without spending
+  single:            { type: "boolean" },  // one composed view instead of four panels
 });
 
 const KINDS = new Set(["character", "item"]);
@@ -86,7 +113,8 @@ function noTextRule(kind, description) {
     ? `[TEXT — HARD RULE]
 Any writing on the object is BLURRED, faded and ILLEGIBLE — the impression of typed lines at a distance, never readable words. No legible letters, no invented alphabets, no gibberish that reads as an attempt at words. Nothing anywhere in frame but the object itself: no captions, labels, headers, annotations, watermarks or logos, and no camera, film or brand names rendered anywhere.`
     : `[NO TEXT — HARD RULE]
-No captions, labels, words, numbers, headers, annotations, gibberish text or logos anywhere. The image is purely visual. Do not render camera, film stock or brand names into the picture.`;
+No captions, labels, words, numbers, headers, annotations, gibberish text or logos anywhere. The image is purely visual. Do not render camera, film stock or brand names into the picture.
+Nothing is written ON the object either: NO engraved, stamped, etched, embossed or painted lettering of any kind — no maker's marks, no model or serial numbers, no monograms. Real antique brass and metal props usually carry a maker's stamp, and a model asked for a realistic one will invent illegible words to put there. Leave every surface blank.`;
 }
 
 function characterPrompt() {
@@ -112,12 +140,18 @@ ${AESTHETIC}`;
 }
 
 function itemPrompt() {
-  return `Professional prop reference sheet. Subject: ${args.name}${description ? ` — ${description}` : ""}${refs.length ? " — the SAME object shown in the reference photograph" : ""}. 16:9 horizontal layout with EXACTLY FOUR EQUAL-WIDTH PANELS side by side, left to right:
+  // Layout leads, and says "tall vertical panel" explicitly. A character sheet
+  // tiles into columns on its own because a standing figure is tall; a small
+  // object does not, and the model reaches for a 2x2 grid or one hero panel
+  // with three insets unless told otherwise in the first sentence.
+  return `Professional prop reference sheet, ONE SINGLE HORIZONTAL ROW of EXACTLY FOUR EQUAL-WIDTH PANELS side by side, left to right, like four frames of film laid end to end. Each panel is a TALL VERTICAL PANEL running the full height of the image, with the object centred inside it. This is NOT a 2x2 grid, NOT a large panel with small insets, NOT a collage. Four panels, one row, equal width, full height.
+
+Subject: ${args.name}${description ? ` — ${description}` : ""}${refs.length ? " — the SAME object shown in the reference photograph" : ""}.
 
 [PANEL 1] FRONT VIEW — the object centred, filling the panel, photographed straight on.
 [PANEL 2] THREE-QUARTER VIEW — same object rotated about 45 degrees, showing depth and side surfaces.
 [PANEL 3] REVERSE OR OPEN VIEW — the back of the object, or the object opened if it opens, showing what a front view cannot.
-[PANEL 4] MACRO DETAIL — a close-up of the single most identifying feature: the marking, wear, damage or inscription that distinguishes this object from every similar one.
+[PANEL 4] MACRO DETAIL — a close-up of the single most identifying physical feature: the wear, damage, patina or shape that distinguishes this object from every similar one. NOT an inscription, marking or engraved label.
 
 [IDENTITY — HARD RULE]
 All four panels show ONE object and one only, at consistent scale relative to the panel. Same material, same colour, same wear and markings throughout. No hands, no people, no second object.
@@ -133,7 +167,27 @@ ${noTextRule(kind, description)}
 ${AESTHETIC}`;
 }
 
-const prompt = kind === "character" ? characterPrompt() : itemPrompt();
+function singleItemPrompt() {
+  return `Museum product photograph of ${args.name}${description ? ` — ${description}` : ""}${refs.length ? " — the SAME object shown in the reference photograph" : ""}. ONE object alone on a plain neutral mid-grey seamless backdrop, photographed slightly above and from a three-quarter angle so that both its length and its height read clearly in a single frame.
+
+[FRAMING]
+The object fills most of the frame, sharp throughout, with even soft studio light and no dramatic shadow hiding any part of it. This single view is the anchor every downstream shot will be matched against, so nothing important may be turned away from camera or lost in shade.
+
+[IDENTITY — HARD RULE]
+ONE object and one only. No hands, no people, no second object, no desk clutter, no props beside it.
+
+${refs.length ? `[REFERENCE-PHOTO PRIORITY]
+Where this prompt conflicts with the reference photograph, the PHOTOGRAPH WINS for shape, material and markings.
+
+` : ""}${noTextRule(kind, description)}
+
+[PHOTOGRAPHIC AESTHETIC]
+Documentary product photography on 35mm colour film, soft natural grain, visible surface texture and fine detail. ABSOLUTELY NOT a 3D render, video-game CG, Pixar, or digital painting.`;
+}
+
+const prompt = kind === "character"
+  ? characterPrompt()
+  : (args.single ? singleItemPrompt() : itemPrompt());
 
 if (args.print) {
   emitSuccess({ ok: true, kind, name: args.name, prompt });
