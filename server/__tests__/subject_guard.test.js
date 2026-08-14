@@ -44,8 +44,52 @@ describe("coverage", () => {
       subjects: [KEY],
       refNodes: [approved("image_17")],
     });
-    assert.match(r.blocked, /not passed to this shot/);
+    assert.match(r.blocked, /neither wired to this shot nor in its lineage/);
     assert.match(r.blocked, /--ref-source-id image_22/, "it must say exactly how to fix it");
+    assert.match(r.blocked, /rebuild the anchor image/, "the video fix is different from the image fix");
+  });
+
+  test("A SUBJECT INHERITED THROUGH THE ANCHOR COUNTS AS COVERED", () => {
+    // The bug this pins: demanding a prop's reference be passed to
+    // generate_video would make that product shot the clip's LAST FRAME. Props
+    // reach a clip through the anchor, and the anchor records what built it.
+    const edges = [
+      { from: "image_22", to: "image_24", kind: "derived" },  // key -> beat-3 anchor
+      { from: "image_24", to: "image_29", kind: "derived" },  // beat-3 -> beat-6 anchor
+    ];
+    const r = checkSubjectCoverage({
+      prompt: "his finger presses the knob of the brass telegraph key",
+      subjects: [KEY],
+      refNodes: [approved("image_29")],   // only the anchor is wired, two steps down
+      edges,
+    });
+    assert.equal(r.blocked, null, "lineage is coverage");
+    assert.equal(r.warning, null);
+  });
+
+  test("lineage does not invent coverage that is not there", () => {
+    const edges = [{ from: "image_8", to: "image_29", kind: "derived" }];
+    const r = checkSubjectCoverage({
+      prompt: "his finger presses the knob of the brass telegraph key",
+      subjects: [KEY],
+      refNodes: [approved("image_29")],
+      edges,
+    });
+    assert.match(r.blocked, /telegraph key/);
+  });
+
+  test("a cycle in the edges does not hang the walk", () => {
+    const edges = [
+      { from: "a", to: "b", kind: "derived" },
+      { from: "b", to: "a", kind: "derived" },
+    ];
+    const r = checkSubjectCoverage({
+      prompt: "the brass telegraph key",
+      subjects: [KEY],
+      refNodes: [approved("a")],
+      edges,
+    });
+    assert.match(r.blocked, /telegraph key/);
   });
 
   test("a named subject with no reference at all BLOCKS, and names the command", () => {
