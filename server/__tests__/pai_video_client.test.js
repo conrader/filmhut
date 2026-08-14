@@ -25,6 +25,10 @@ function writeTmpFile(t, name, bytes = PNG_BYTES) {
 }
 
 test("submitVideo with no refs submits JSON to videos/generations", async (t) => {
+  // Pinned to Ltx2: this asserts the 32px grid search, which a model with
+  // fixed dimensions does not exercise.
+  process.env.DEAPI_VIDEO_MODEL = "Ltx2_3_22B_Dist_INT8";
+  t.after(() => { delete process.env.DEAPI_VIDEO_MODEL; });
   const calls = installDeapiFetch(t);
 
   const result = await submitVideo({
@@ -80,6 +84,9 @@ test("submitVideo with image refs routes to videos/animations", async (t) => {
 });
 
 test("submitVideo with an audio ref routes to videos/audio-syncs", async (t) => {
+  // audio2video exists only on Ltx2; the default model cannot do it.
+  process.env.DEAPI_VIDEO_MODEL = "Ltx2_3_22B_Dist_INT8";
+  t.after(() => { delete process.env.DEAPI_VIDEO_MODEL; });
   const calls = installDeapiFetch(t);
   const audio1 = writeTmpFile(t, "voice.mp3");
 

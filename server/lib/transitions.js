@@ -89,11 +89,24 @@ export function buildTransitionFilter(clips, plan) {
   const withTransition = new Set(plan.joins.map((j) => j.join));
 
   clips.forEach((c, i) => {
-    parts.push(`[${i}:v]settb=AVTB,fps=30,format=yuv420p[v${i}]`);
+    // Apply the clip's trim window BEFORE the crossfade. Without this the
+    // transition path silently renders whole clips while the non-transition
+    // path honours in_s/out_s — two exporters disagreeing about the same edit.
+    const from = Number(c.in_s ?? 0);
+    const to = c.out_s == null ? null : Number(c.out_s);
+    const vTrim = from > 0 || to != null
+      ? (to == null ? `trim=start=${from},` : `trim=start=${from}:end=${to},`)
+      : "";
+    parts.push(`[${i}:v]${vTrim}setpts=PTS-STARTPTS,settb=AVTB,fps=30,format=yuv420p[v${i}]`);
+
     if (c.hasAudio === false) {
-      parts.push(`anullsrc=channel_layout=stereo:sample_rate=48000,atrim=duration=${Number(c.duration).toFixed(3)},asetpts=PTS-STARTPTS[a${i}]`);
+      const dur = (to ?? Number(c.duration) ?? 0) - from;
+      parts.push(`anullsrc=channel_layout=stereo:sample_rate=48000,atrim=duration=${dur.toFixed(3)},asetpts=PTS-STARTPTS[a${i}]`);
     } else {
-      parts.push(`[${i}:a]aresample=48000,asetpts=PTS-STARTPTS[a${i}]`);
+      const aTrim = from > 0 || to != null
+        ? (to == null ? `atrim=start=${from},` : `atrim=start=${from}:end=${to},`)
+        : "";
+      parts.push(`[${i}:a]${aTrim}aresample=48000,asetpts=PTS-STARTPTS[a${i}]`);
     }
   });
 

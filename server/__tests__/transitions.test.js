@@ -110,6 +110,32 @@ describe("against real video", { skip: !ffmpegAvailable }, () => {
     assert.ok(info.duration < 12, "if this equals 12 the transitions did not apply");
   });
 
+  test("A TRIM IS HONOURED THROUGH THE TRANSITION PATH", async () => {
+    // The two exporters must agree about the same edit. The transition path
+    // originally rendered whole clips while buildReelMaster honoured in_s and
+    // out_s, so trimming a reel and adding a dissolve silently un-trimmed it.
+    const src = [await clip("tr1.mp4", 6), await clip("tr2.mp4", 6)];
+    const clips = src.map((c) => ({ ...c, in_s: 1, out_s: 4, duration: 3 }));
+    const plan = planTransitions(clips, { durationS: 0.5 });
+    const out = path.join(dir, "trimmed-xfade.mp4");
+
+    await run("ffmpeg", [
+      "-y", ...clips.flatMap((c) => ["-i", c.path]),
+      "-filter_complex", buildTransitionFilter(clips, plan),
+      "-map", "[outv]", "-map", "[outa]",
+      "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+      out, "-loglevel", "error",
+    ], { maxBuffer: 32e6 });
+
+    const info = await probeMedia(out);
+    // Two 3s windows out of 6s sources, minus one 0.5s dissolve = 5.5s.
+    assert.ok(
+      Math.abs(info.duration - 5.5) < 0.4,
+      `expected ~5.5s from two 3s windows with one dissolve, got ${info.duration.toFixed(2)}s. ` +
+      "12s would mean the trim was ignored.",
+    );
+  });
+
   test("the join actually blends rather than cutting", async () => {
     const clips = [await clip("b1.mp4", 3, "0x000000"), await clip("b2.mp4", 3, "0xffffff")];
     const plan = planTransitions(clips, { durationS: 1 });

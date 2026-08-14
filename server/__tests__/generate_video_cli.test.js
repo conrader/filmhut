@@ -190,10 +190,14 @@ test("generate_video.js direct fire with image ref uploads multipart and lands n
   assert.equal(submit.url, "/api/v2/videos/animations");
   const fields = submit.form.fields;
   assert.equal(fields.prompt, prompt);
-  assert.equal(fields.model, "Ltx2_3_22B_Dist_INT8");
+  // The default model. Changing DEAPI_VIDEO_MODEL changes this — the point of
+  // the getter on the registry entry.
+  assert.equal(fields.model, "MiniMaxH3_33B_Turbo_INT8");
   assert.equal(fields.seed, "-1");
-  assert.equal(fields.width, "1312");
-  assert.equal(fields.height, "736");
+  // The default model PINS its dimensions (min_width === max_width), so a
+  // 16:9 request snaps to 1344x768 rather than searching a resolution grid.
+  assert.equal(fields.width, "1344");
+  assert.equal(fields.height, "768");
   assert.equal(fields.fps, "24");
   assert.equal(fields.frames, "192");
   assert.equal(fields.steps, "8");

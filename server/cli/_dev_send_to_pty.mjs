@@ -122,6 +122,11 @@ function runPhase({ payload, captureMode, budgetMs }) {
       transports: ["websocket"],
       reconnection: false,
       timeout: 5000,
+      // The viewer is default-deny. Loopback is exempt, so this works
+      // unauthenticated on the same box — but it must carry a token when the
+      // exemption is off (PAI_AUTH_LOOPBACK=0) or the viewer is reached over
+      // a tailnet, otherwise the handshake is refused.
+      ...(process.env.PAI_TOKEN ? { auth: { token: process.env.PAI_TOKEN } } : {}),
     });
 
     const state = {

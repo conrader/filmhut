@@ -66,6 +66,17 @@ export const DEFAULT_CATALOG = [
     },
   },
   {
+    // Real limits read off the live catalogue on 2026-08-14. Width and height
+    // are PINNED, which is the shape the plan has to cope with.
+    name: "MiniMax H3 33B Turbo", slug: "MiniMaxH3_33B_Turbo_INT8",
+    inference_types: ["txt2video", "img2video"], tags: [], status: "standard_model",
+    info: {
+      limits: { min_width: 1344, max_width: 1344, min_height: 768, max_height: 768, min_steps: 8, max_steps: 8, min_frames: 56, max_frames: 243, min_fps: 24, max_fps: 24 },
+      features: { supports_last_frame: true },
+      defaults: { steps: 8, fps: 24 },
+    },
+  },
+  {
     name: "Kokoro", slug: "Kokoro",
     inference_types: ["txt2audio"], tags: [], status: "standard_model",
     info: {

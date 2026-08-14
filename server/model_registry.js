@@ -53,6 +53,10 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenvConfig({ path: path.resolve(__dirname, "..", ".env") });
 
+// Read at ACCESS time, not module-load time. deapi_slug is a getter on each
+// entry for this reason: switching DEAPI_VIDEO_MODEL should take effect
+// immediately, and a frozen slug made the setting untestable and required a
+// restart to change.
 function envSlug(name, fallback) {
   const v = String(process.env[name] ?? "").trim();
   return v || fallback;
@@ -145,7 +149,7 @@ export const MODELS = [
     id: "image-generation",
     provider: "deapi",
     kind: "image",
-    deapi_slug: envSlug("DEAPI_IMAGE_MODEL", "Flux1schnell"),
+    get deapi_slug() { return envSlug("DEAPI_IMAGE_MODEL", "Flux1schnell"); },
     // Flux.2 Klein serves the ref/edit route on both tiers: it takes 3
     // input images where QwenImageEdit_Plus_NF4 takes 1, costs ~10× less,
     // and supports a custom output size. Set DEAPI_IMAGE_EDIT_MODEL to
@@ -163,7 +167,7 @@ export const MODELS = [
     id: "image-generation-pro",
     provider: "deapi",
     kind: "image_pro",
-    deapi_slug: envSlug("DEAPI_IMAGE_PRO_MODEL", "Flux_2_Klein_4B_BF16"),
+    get deapi_slug() { return envSlug("DEAPI_IMAGE_PRO_MODEL", "Flux_2_Klein_4B_BF16"); },
     deapi_edit_slug: envSlug("DEAPI_IMAGE_PRO_EDIT_MODEL", "Flux_2_Klein_4B_BF16"),
     label: "Image Pro (deAPI Flux.2 Klein)",
     cost_approx_usd: imageProCostBySize,
@@ -177,7 +181,13 @@ export const MODELS = [
     id: "video-generation",
     provider: "deapi",
     kind: "video",
-    deapi_slug: envSlug("DEAPI_VIDEO_MODEL", "Ltx2_3_22B_Dist_INT8"),
+    // MiniMax H3 is the default: 1344x768 (above 720p) against Ltx2's 1024
+    // ceiling, and markedly better identity retention across shots. It costs
+    // ~4x more per clip, which is the trade. Ltx2 remains the only model
+    // offering audio2video, so lip-sync work still needs DEAPI_VIDEO_MODEL set
+    // back to it. Width and height are PINNED on H3 — aspect/resolution flags
+    // are advisory and the plan snaps to 1344x768.
+    get deapi_slug() { return envSlug("DEAPI_VIDEO_MODEL", "MiniMaxH3_33B_Turbo_INT8"); },
     label: "Video (deAPI LTX-2)",
     cost_approx_usd: videoCostByResAndDuration,
     capabilities: ["text-to-video", "image-to-video", "audio-to-video"],
@@ -194,7 +204,7 @@ export const MODELS = [
     // CLI's --prompt voice brief drives the voice exactly as it did on
     // the previous provider. DEAPI_TTS_MODEL=Kokoro switches to preset
     // voices (cheaper, 3-char minimum, no design brief).
-    deapi_slug: envSlug("DEAPI_TTS_MODEL", "Qwen3_TTS_12Hz_1_7B_VoiceDesign"),
+    get deapi_slug() { return envSlug("DEAPI_TTS_MODEL", "Qwen3_TTS_12Hz_1_7B_VoiceDesign"); },
     label: "Voice (deAPI Qwen3 TTS VoiceDesign)",
     cost_approx_usd: voiceCostByChars,
     capabilities: ["tts", "voice-design"],
@@ -207,7 +217,7 @@ export const MODELS = [
     id: "music-generation",
     provider: "deapi",
     kind: "music",
-    deapi_slug: envSlug("DEAPI_MUSIC_MODEL", "AceStep_1_5_Turbo"),
+    get deapi_slug() { return envSlug("DEAPI_MUSIC_MODEL", "AceStep_1_5_Turbo"); },
     label: "Music (deAPI AceStep)",
     cost_approx_usd: null, // quoted exactly via audio/music/price
     capabilities: ["music-generation"],
@@ -220,7 +230,7 @@ export const MODELS = [
     id: "transcription",
     provider: "deapi",
     kind: "transcription",
-    deapi_slug: envSlug("DEAPI_TRANSCRIBE_MODEL", "WhisperLargeV3Ct2"),
+    get deapi_slug() { return envSlug("DEAPI_TRANSCRIBE_MODEL", "WhisperLargeV3Ct2"); },
     label: "Transcription (deAPI Whisper)",
     cost_approx_usd: null, // priced by audio duration, quoted per call
     capabilities: ["transcription", "diarization"],
@@ -234,7 +244,7 @@ export const MODELS = [
     id: "video-upscale",
     provider: "deapi",
     kind: "upscale",
-    deapi_slug: envSlug("DEAPI_UPSCALE_MODEL", "FlashVSR_Tiny"),
+    get deapi_slug() { return envSlug("DEAPI_UPSCALE_MODEL", "FlashVSR_Tiny"); },
     label: "Upscaler (deAPI FlashVSR)",
     cost_approx_usd: null, // quoted exactly via videos/upscales/price
     capabilities: ["video-upscale"],

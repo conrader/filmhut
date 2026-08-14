@@ -258,9 +258,14 @@ export async function buildReelWithTransitions(
   for (const n of reel) {
     const file = await resolveClipFile(n, projectDir);
     const media = await probeMedia(file);
+    const from = Number(n.data?.in_s ?? 0);
+    const to = n.data?.out_s == null ? null : Number(n.data.out_s);
     clips.push({
       path: file,
-      duration: media.duration,
+      // The plan sequences the TRIMMED lengths; using the file's full duration
+      // would put every offset after a trimmed clip in the wrong place.
+      duration: (to ?? media.duration) - from,
+      sourceDuration: media.duration,
       hasAudio: media.hasAudio,
       in_s: n.data?.in_s ?? null,
       out_s: n.data?.out_s ?? null,
