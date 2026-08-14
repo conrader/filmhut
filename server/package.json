@@ -10,7 +10,8 @@
   "scripts": {
     "viewer": "node --watch local_viewer.js",
     "test": "node --test __tests__/*.test.js",
-    "postinstall": "chmod +x node_modules/node-pty/prebuilds/*/spawn-helper 2>/dev/null || true"
+    "postinstall": "chmod +x node_modules/node-pty/prebuilds/*/spawn-helper 2>/dev/null || true",
+    "price-check": "node scripts/price_check.mjs"
   },
   "dependencies": {
     "ajv": "^8.17.1",

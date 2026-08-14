@@ -89,21 +89,32 @@ function pixelsForTier(longSide, aspectRatio) {
 }
 
 // Image standard tier. Measured on Flux1schnell:
-//   $0.000922 base + px × (5.62e-10 + 2.78e-10 × steps), 4 steps default.
-// Live checks: 1024x576 $0.00191, 2048x1152 $0.00487 (both within 0.1%).
+//   $0.000512 base + px × (3.122e-10 + 1.544e-10 × steps), 4 steps default.
+// Live checks (2026-08-14): 1024x576 $0.0010607, 2048x1152 $0.0027065.
+//
+// 2048 IS THE CEILING. deAPI rejects width > 2048 on this route outright, so
+// the "4K" tier some UI copy still offers cannot be bought — a 4K request is
+// clamped to 2048 by the client's deriveDimensions and billed accordingly.
+// Estimating it at 3840 would overstate the price by ~3.5×.
+const IMAGE_MAX_LONG_SIDE = 2048;
+
 function imageCostBySize(params = {}) {
   const size = String(params.image_size || params.imageSize || "2K").toLowerCase();
-  const longSide = size === "1k" ? 1024 : size === "4k" ? 3840 : 2048;
+  const requested = size === "1k" ? 1024 : size === "4k" ? 3840 : 2048;
+  const longSide = Math.min(requested, IMAGE_MAX_LONG_SIDE);
   const px = pixelsForTier(longSide, params.aspect_ratio);
-  return +(0.000922 + px * (5.62e-10 + 2.78e-10 * 4)).toFixed(4);
+  return +(0.000512 + px * (3.122e-10 + 1.544e-10 * 4)).toFixed(4);
 }
 
 // Image pro tier. Measured on Flux_2_Klein_4B_BF16 (steps pinned at 4):
-//   text-to-image  $0.001264 base + px × 2.296e-9  (1024x1024 → $0.00367)
-//   ref/edit route flat $0.006588, independent of resolution
+//   text-to-image  $0.000702 base + px × 1.2756e-9  (1024x1024 → $0.00204)
+//   ref/edit route flat $0.00366, independent of resolution
 // Pro is the reference tier (character sheets, mosaics), so the estimate
 // takes whichever route is dearer rather than assuming the ref-less one.
-const IMAGE_EDIT_FLAT_USD = 0.0066;
+//
+// Pro caps at 1536 wide, not 2560: a --size 2560x1440 sheet comes back
+// 1536x1440, which is why the sheets on disk are that shape.
+const IMAGE_EDIT_FLAT_USD = 0.00366;
 
 function imageProCostBySize(params = {}) {
   const size = String(params.size || IMAGE_PRO_DEFAULT_SIZE);
@@ -111,28 +122,59 @@ function imageProCostBySize(params = {}) {
   const px = Number.isFinite(w) && Number.isFinite(h)
     ? w * h
     : pixelsForTier(1024, "1:1");
-  return +Math.max(0.001264 + px * 2.296e-9, IMAGE_EDIT_FLAT_USD).toFixed(4);
+  return +Math.max(0.000702 + px * 1.2756e-9, IMAGE_EDIT_FLAT_USD).toFixed(4);
 }
 
-// Video tier. Measured on Ltx2_3_22B_Dist_INT8 at 24 fps:
-//   $0.0388 base + px × frames × 1.159e-10 (linear in frames to <1%).
-// The base dominates short clips — 1024x576 costs $0.042 at 2s and
-// $0.055 at 10s — so duration moves the price far less than a
-// per-second model implies.
+// Video tier. THE TWO DEFAULT-CANDIDATE MODELS PRICE DIFFERENTLY IN SHAPE,
+// so this cannot be one formula with swapped constants.
+//
+// MiniMax H3 (the default) pins width, height and fps — 1344x768 @ 24 —
+// leaving frames as the only variable, and prices on it as a pure power law:
+//
+//     price = 4.5241e-3 × frames^0.6
+//
+// That is not a fit. It reproduces the live /price quote to 0.00% at 56, 72,
+// 96, 124, 150, 200 and 243 frames — the whole legal range. Because the
+// exponent is below 1, length is unusually cheap on H3: 2.33s costs $0.051 and
+// 10.13s costs $0.122, so a clip four times longer costs 2.4× more, not 4×.
+// Prefer fewer, longer takes.
+//
+// `resolution` is IGNORED for H3. Its dimensions are pinned (min == max), so
+// asking for 480p or 1080p changes neither the output nor the price.
+//
+// Ltx2 and the rest price affinely on pixels × frames instead:
+//   $0.021556 base + px × frames × 6.4389e-11
+// Live check: 1024x576 at 120f $0.026110, at 240f $0.030665 (exact).
+const H3_COEFF = 4.5241e-3;
+const H3_EXPONENT = 0.6;
+const H3_FPS = 24;
+const H3_MIN_FRAMES = 56;
+const H3_MAX_FRAMES = 243;
+
+const VIDEO_AFFINE_BASE = 0.021556;
+const VIDEO_AFFINE_PER_PX_FRAME = 6.4389e-11;
+
 function videoCostByResAndDuration(params = {}) {
-  const res = String(params.resolution || "720p").toLowerCase();
   const dur = Number(params.duration) || 5;
+  const slug = envSlug("DEAPI_VIDEO_MODEL", "MiniMaxH3_33B_Turbo_INT8");
+
+  if (/^MiniMaxH3/i.test(slug)) {
+    const frames = Math.min(H3_MAX_FRAMES, Math.max(H3_MIN_FRAMES, Math.round(dur * H3_FPS)));
+    return +(H3_COEFF * Math.pow(frames, H3_EXPONENT)).toFixed(4);
+  }
+
+  const res = String(params.resolution || "720p").toLowerCase();
   const [w, h] = res === "1080p" ? [1920, 1080] : res === "480p" ? [854, 480] : [1280, 720];
   const frames = Math.round(dur * 24);
-  return +(0.0388 + w * h * frames * 1.159e-10).toFixed(4);
+  return +(VIDEO_AFFINE_BASE + w * h * frames * VIDEO_AFFINE_PER_PX_FRAME).toFixed(4);
 }
 
 // Voice tier. Strictly linear per input character, no base fee, but the
 // rate differs by an order of magnitude between models — measured
-// exactly: Qwen3 TTS VoiceDesign $1.2857e-5/char ($12.86 per 1M), Kokoro
-// $7.714e-7/char ($0.77 per 1M). The design model is the default, so
+// exactly: Qwen3 TTS VoiceDesign $7.1429e-6/char ($7.14 per 1M), Kokoro
+// $4.2857e-7/char ($0.43 per 1M). The design model is the default, so
 // price against it; DEAPI_TTS_MODEL=Kokoro is ~17× cheaper per character.
-const VOICE_USD_PER_CHAR = 1.2857e-5;
+const VOICE_USD_PER_CHAR = 7.1429e-6;
 
 function voiceCostByChars(params = {}) {
   const chars = typeof params.text_chars === "number"

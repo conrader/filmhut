@@ -20,10 +20,13 @@ test("model registry exposes image-generation-pro without changing image default
 });
 
 test("model registry prices image pro by tier with the flat edit floor dominating small sizes", () => {
-  // Small sizes (1024x1024) sit below the $0.0066 flat edit-path floor,
-  // so the floor wins; only large sizes (3840x2160) price above it.
-  assert.equal(getCost("image-generation-pro", { size: "1024x1024" }), 0.0066);
-  assert.equal(getCost("image-generation-pro", { size: "3840x2160" }), 0.0203);
+  // Small sizes (1024x1024) sit below the $0.00366 flat edit-path floor, so
+  // the floor wins. 1536x1440 — pro's real maximum, since the route caps at
+  // 1536 wide — prices just under it, so the floor still wins there too.
+  // Live quotes 2026-08-14: edit route $0.00366 flat, text-to-image
+  // $0.0035237 at 1536x1440.
+  assert.equal(getCost("image-generation-pro", { size: "1024x1024" }), 0.0037);
+  assert.equal(getCost("image-generation-pro", { size: "1536x1440" }), 0.0037);
 });
 
 test("model registry keeps the image (standard) default on deAPI Flux1schnell", () => {
