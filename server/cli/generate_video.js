@@ -42,6 +42,7 @@ import {
 import { protectOnExit, recordProviderRef } from "./_resume.js";
 import { VIDEO_LIMITS } from "./_limits.js";
 import { checkPromptRefsWired } from "./_ref_guard.js";
+import { checkRefsReviewed } from "./_review_guard.js";
 
 const rawArgv = process.argv.slice(2);
 const defaultVideoModel = getDefault("video");
@@ -123,6 +124,25 @@ const refGuardMsg = checkPromptRefsWired({
 if (refGuardMsg) {
   fail("bad_args", refGuardMsg);
   process.exit(2);
+}
+
+// Refuse a rejected reference at STAGE time as well as at spend time.
+// The spend-time guard further down is the one that protects the money; this
+// one exists so the answer arrives now, rather than after the user fires a
+// draft that was never going to run. See _review_guard.js.
+if (refSourcesArg.length > 0) {
+  try {
+    const wf = JSON.parse(await fs.readFile("workflow.json", "utf8"));
+    const byId = new Map((wf.nodes ?? []).map((n) => [n.id, n]));
+    const { blocked } = checkRefsReviewed(refSourcesArg.map((id) => byId.get(id)));
+    if (blocked) {
+      fail("bad_args", blocked);
+      process.exit(2);
+    }
+  } catch (e) {
+    if (e?.code !== "ENOENT" && !(e instanceof SyntaxError)) throw e;
+    // No canvas to consult — the spend-time guard still runs.
+  }
 }
 
 const jobId = args["existing-job-id"] || newJobId();
@@ -282,6 +302,23 @@ try {
     throw new Error("bad_args: ref cap exceeded");
   }
 
+  // A reference someone looked at and rejected must not be paid for again.
+  // Checked HERE — after the ids are known, before a single provider call —
+  // because the whole value of a rejection is that it stops the next spend.
+  try {
+    const wf0 = JSON.parse(await fs.readFile("workflow.json", "utf8"));
+    const byId0 = new Map((wf0.nodes ?? []).map((n) => [n.id, n]));
+    const { blocked } = checkRefsReviewed(imgSrcIds.map((id) => byId0.get(id)));
+    if (blocked) {
+      fail("bad_args", blocked);
+      exitCode = 2;
+      throw new Error("bad_args: rejected reference");
+    }
+  } catch (e) {
+    if (String(e?.message ?? "").startsWith("bad_args:")) throw e;
+    // Unreadable workflow.json is the guard's problem, not the caller's.
+  }
+
   const resolvedImages = await buildProviderRefs({ sourceIds: imgSrcIds, projectId });
   const resolvedAudios = await buildProviderRefs({ sourceIds: audSrcIds, projectId });
   const resolvedVideos = await buildProviderRefs({ sourceIds: vidSrcIds, projectId });
@@ -366,6 +403,7 @@ try {
   // front, profile, back and a face close-up. Say so rather than assume the
   // caller has read the skill.
   let anchorAdvice = null;
+  let reviewWarning = null;
   try {
     const wf = JSON.parse(await fs.readFile("workflow.json", "utf8"));
     const byId = new Map((wf.nodes ?? []).map((n) => [n.id, n]));
@@ -378,6 +416,7 @@ try {
         + "A single image gives the model one viewpoint and it invents the rest; "
         + 'build a multi-angle sheet with reference_sheet.js --kind character to hold identity across shots.';
     }
+    reviewWarning = checkRefsReviewed(refSourcesArg.map((id) => byId.get(id))).warning;
   } catch {
     // No workflow.json, or unreadable — advice is a nicety, never a blocker.
   }
@@ -431,6 +470,7 @@ try {
   };
   if (mutResult) Object.assign(payload, mutResult);
   if (anchorAdvice) payload.anchor_advice = anchorAdvice;
+  if (reviewWarning) payload.review_warning = reviewWarning;
 
   emitted = emitSuccess(payload);
 } catch (e) {

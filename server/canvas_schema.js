@@ -94,6 +94,38 @@ const imageResultDataSchema = {
       minItems: 2,
       maxItems: 2,
     },
+    // Review verdict, written by cli/review_reference.js. Enumerated rather
+    // than free text: a typo'd verdict that stored cleanly would read as
+    // "not approved" to the guard and as "reviewed" to a person, which is the
+    // worst of both.
+    review: {
+      type: "object",
+      additionalProperties: true,
+      required: ["verdict"],
+      properties: {
+        verdict: { type: "string", enum: ["pending", "approved", "rejected"] },
+        reviewer: { type: "string" },
+        reason: { type: "string" },
+        at: { type: "string" },
+        inspected_at: { type: "string" },
+        machine_verdict: { type: "string", enum: ["fail", "inconclusive"] },
+        identity_checked: { type: "boolean" },
+        face_strip: { type: "string" },
+        panels: { type: "array", items: { type: "string" } },
+        checks: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: true,
+            properties: {
+              id: { type: "string" },
+              status: { type: "string", enum: ["ok", "warn", "fail", "unchecked"] },
+              detail: { type: "string" },
+            },
+          },
+        },
+      },
+    },
   },
 };
 

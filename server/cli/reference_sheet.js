@@ -68,11 +68,11 @@ function characterPrompt() {
 
 [PANEL 1] FULL BODY FRONT VIEW — head to feet, facing camera, arms slightly away from the body in a neutral A-pose.
 [PANEL 2] FULL BODY PROFILE VIEW — perfect 90-degree side view, same pose and scale.
-[PANEL 3] FULL BODY BACK VIEW — facing completely away, showing the back of the costume and hair.
-[PANEL 4] CLOSE-UP HEAD AND SHOULDERS — bust only, the face filling 50-60% of the panel, looking at camera, neutral expression. This panel is the face-identity anchor for downstream video.
+[PANEL 3] FULL BODY BACK VIEW — facing completely away, showing the back of the costume and hair. SAME GARMENTS as panels 1 and 2, seen from behind — not a jacket, coat or outer layer that panels 1 and 2 do not show.
+[PANEL 4] CLOSE-UP HEAD AND SHOULDERS — bust only, the face filling 50-60% of the panel, looking at camera, neutral expression. This panel is the face-identity anchor for downstream video. It occupies the FULL HEIGHT of its own column and stays inside it: it must not overlap panel 3, sit in a corner, or float in empty backdrop.
 
 [IDENTITY — HARD RULE]
-All four panels show ONE person and one only. No second figure, no other face anywhere in the image, including in panel 4. Do not introduce facial hair, spectacles, headwear or accessories that the description and references do not specify.
+All four panels show ONE person and one only. No second figure, no other face anywhere in the image, including in panel 4. Do not introduce facial hair, spectacles, headwear or accessories that the description and references do not specify — and do not omit any that they do. The face in panel 4 is the SAME AGE and build as in panel 1: same spectacle shape, same moustache or beard shape, same jawline. Panel 4 is a closer photograph of the person in panel 1, not a second person who resembles them.
 
 ${refs.length ? `[REFERENCE-PHOTO PRIORITY]
 Where this prompt conflicts with the reference photograph${refs.length > 1 ? "s" : ""}, the PHOTOGRAPH WINS for face, hair and costume. No textbook substitution.
