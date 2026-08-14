@@ -214,16 +214,53 @@ if (args["source-node-id"]) argv.push("--source-node-id", args["source-node-id"]
 if (args["project-id"]) argv.push("--project-id", args["project-id"]);
 if (args["no-canvas-write"]) argv.push("--no-canvas-write");
 
+
+/** Upsert this subject into the project's subjects.json, pointing at its node. */
+async function linkSubject(name, subjectKind, nodeId) {
+  const fs = await import("node:fs/promises");
+  const path2 = await import("node:path");
+  const { readActiveProject } = await import("../local_mirror.js");
+  const { PAI_REPO_ROOT: ROOT } = await import("./_cli.js");
+  const pid = args["project-id"] || (await readActiveProject());
+  const file = path2.join(ROOT, "projects", pid, "subjects.json");
+
+  let subjects = [];
+  try {
+    const doc = JSON.parse(await fs.readFile(file, "utf8"));
+    if (Array.isArray(doc?.subjects)) subjects = doc.subjects;
+  } catch { /* first subject in this project */ }
+
+  const k = (v) => String(v ?? "").trim().toLowerCase();
+  const i = subjects.findIndex((s) => k(s.name) === k(name));
+  const entry = {
+    name,
+    kind: subjectKind,
+    aliases: i >= 0 ? subjects[i].aliases ?? [] : [],
+    node_id: nodeId,
+    declared_at: i >= 0 ? subjects[i].declared_at : new Date().toISOString(),
+  };
+  if (i >= 0) subjects[i] = entry; else subjects.push(entry);
+  await fs.writeFile(file, `${JSON.stringify({ version: 1, subjects }, null, 2)}\n`, "utf8");
+}
+
 const child = spawn(process.execPath, argv, { stdio: ["ignore", "pipe", "pipe"] });
 let out = "";
 let err = "";
 child.stdout.on("data", (d) => { out += d; });
 child.stderr.on("data", (d) => { err += d; });
 
-child.on("close", (code) => {
+child.on("close", async (code) => {
   const line = out.trim().split("\n").pop() ?? "";
   try {
     const parsed = JSON.parse(line);
+    // Register the subject against the node just made, so the declared list and
+    // the built references cannot drift apart. Building a reference IS
+    // declaring the subject; requiring both by hand would guarantee that one
+    // day only one of them happens.
+    const nodeId = parsed?.canvas_mutation?.node_id;
+    if (parsed.ok !== false && nodeId) {
+      await linkSubject(args.name, kind, nodeId).catch(() => {});
+    }
     // Pass the child's own JSON straight through, tagged with what it is, so
     // the caller sees one line in the usual shape.
     emitSuccess({ ...parsed, sheet_kind: kind, sheet_name: args.name });

@@ -43,6 +43,7 @@ import { protectOnExit, recordProviderRef } from "./_resume.js";
 import { VIDEO_LIMITS } from "./_limits.js";
 import { checkPromptRefsWired } from "./_ref_guard.js";
 import { checkRefsReviewed } from "./_review_guard.js";
+import { checkSubjectCoverage } from "./_subject_guard.js";
 
 const rawArgv = process.argv.slice(2);
 const defaultVideoModel = getDefault("video");
@@ -74,6 +75,7 @@ const args = parseArgs({
   stage:                   { type: "boolean" },
   "draft-only":            { type: "boolean" },
   "existing-job-id":       { type: "string" },
+  "allow-unreferenced":    { type: "boolean" },
   "auto-run-id":           { type: "string" },
 });
 
@@ -124,6 +126,31 @@ const refGuardMsg = checkPromptRefsWired({
 if (refGuardMsg) {
   fail("bad_args", refGuardMsg);
   process.exit(2);
+}
+
+// Refuse to render a shot that NAMES a declared subject without anchoring it.
+// Runs before staging and before any paid call. See _subject_guard.js — the
+// subject list is declared in subjects.json, never guessed from prose.
+if (!args["allow-unreferenced"]) {
+  try {
+    const [wfRaw, subjRaw] = await Promise.all([
+      fs.readFile("workflow.json", "utf8"),
+      fs.readFile("subjects.json", "utf8").catch(() => '{"subjects":[]}'),
+    ]);
+    const byId = new Map((JSON.parse(wfRaw).nodes ?? []).map((n) => [n.id, n]));
+    const subjects = JSON.parse(subjRaw).subjects ?? [];
+    const { blocked } = checkSubjectCoverage({
+      prompt: args.prompt,
+      subjects,
+      refNodes: refSourcesArg.map((id) => byId.get(id)),
+    });
+    if (blocked) {
+      fail("bad_args", blocked);
+      process.exit(2);
+    }
+  } catch (e) {
+    if (e?.code !== "ENOENT" && !(e instanceof SyntaxError)) throw e;
+  }
 }
 
 // Refuse a rejected reference at STAGE time as well as at spend time.
