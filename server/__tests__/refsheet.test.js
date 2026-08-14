@@ -117,6 +117,35 @@ describe("inspectSheet", () => {
     assert.equal(r.machine_verdict, "fail");
   });
 
+  test("a 2x2 GRID is caught, though it has the same aspect ratio as a good sheet", async () => {
+    // A prop sheet came back as a 2x2 grid. Sliced as a 1x4 strip every check
+    // passed — each column did contain subject matter — and every crop was
+    // garbage. Aspect ratio cannot separate the two: the grid and both correct
+    // sheets were all 1536x1440. The gutter is the only tell.
+    const grid = await sheet("grid.png", [
+      [0.05, 0.35], [0.05, 0.35], [0.05, 0.35], [0.05, 0.35],
+    ]);
+    // Second row of the grid, composited on top.
+    const withLower = path.join(dir, "grid2.png");
+    const boxes = panelBoxes(1200, 900, 4);
+    await sharp(grid).composite(boxes.map((b) => ({
+      input: { create: { width: Math.round(b.width * 0.7), height: Math.round(900 * 0.35), channels: 3, background: { r: 20, g: 30, b: 40 } } },
+      left: b.left + Math.round(b.width * 0.15),
+      top: Math.round(900 * 0.6),
+    }))).toFile(withLower);
+
+    const r = await inspectSheet({ imagePath: withLower, kind: "item", panelCount: 4, outDir: path.join(dir, "o8") });
+    const c = r.checks.find((x) => x.id === "layout_is_single_row");
+    assert.equal(c.status, "fail", c.detail);
+    assert.equal(r.machine_verdict, "fail");
+  });
+
+  test("a real single row is not mistaken for a grid", async () => {
+    const f = await sheet("row.png", [[0.05, 0.8], [0.05, 0.8], [0.05, 0.8], [0.05, 0.8]]);
+    const r = await inspectSheet({ imagePath: f, kind: "character", panelCount: 4, outDir: path.join(dir, "o9") });
+    assert.equal(r.checks.find((x) => x.id === "layout_is_single_row").status, "ok");
+  });
+
   test("a thin close-up panel fails — the head did not fill its panel", async () => {
     // The real defect from this project: three good full-body panels and a
     // close-up floating in mostly empty space.

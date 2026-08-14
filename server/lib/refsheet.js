@@ -90,6 +90,66 @@ export async function subjectCoverage(imagePath, box) {
   return round(off / (info.width * info.height));
 }
 
+/**
+ * Does this column have a band of bare backdrop across its middle?
+ *
+ * That is what a 2xN GRID looks like when you slice it as a 1xN strip: each
+ * "panel" is really two stacked panels with a gutter between them. Aspect ratio
+ * cannot tell the two layouts apart — the character sheets that work and the
+ * grid that did not are all 1536x1440 — but the gutter can.
+ *
+ * Everything else in this file would happily pass such a sheet: each vertical
+ * quarter does contain subject matter, the costume does match itself. The
+ * panels are simply not the panels anyone asked for, and every crop taken from
+ * them is wrong.
+ */
+async function hasMidBandGap(imagePath, box) {
+  const COLS = 32;
+  const rows = 64;
+  const { data } = await sharp(imagePath)
+    .extract(box)
+    .greyscale()
+    .resize(COLS, rows, { fit: "fill" })
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  // Take the backdrop from the panel's own EDGE COLUMNS, not from the whole
+  // panel. The modal value over a whole panel is the backdrop only while the
+  // backdrop is the majority of it — let the subject fill more than half and
+  // the modal becomes the SUBJECT, every test inverts, and a gutter reads as
+  // solid content. The outer tenth of a panel is reliably seamless.
+  const edge = Math.max(1, Math.round(COLS * 0.1));
+  const hist = new Uint32Array(256);
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < COLS; x++) {
+      if (x < edge || x >= COLS - edge) hist[data[y * COLS + x]] += 1;
+    }
+  }
+  let modal = 0;
+  for (let v = 1; v < 256; v++) if (hist[v] > hist[modal]) modal = v;
+
+  const coverage = [];
+  for (let y = 0; y < rows; y++) {
+    let off = 0;
+    for (let x = 0; x < COLS; x++) if (Math.abs(data[y * COLS + x] - modal) > 18) off += 1;
+    coverage.push(off / COLS);
+  }
+  // Only the middle third: a strip panel is empty at top and bottom too
+  // (headroom, floor), and that is not what this is looking for.
+  //
+  // Counted as a FRACTION of near-empty rows, not as a contiguous run: the
+  // gutter in a real grid gets interrupted — a water stain on one panel's edge
+  // put a single full row in the middle of an otherwise clean gap and a
+  // run-length test missed the whole sheet.
+  const from = Math.floor(rows * 0.36);
+  const to = Math.ceil(rows * 0.64);
+  const mid = coverage.slice(from, to);
+  const emptyFraction = mid.filter((c) => c < 0.08).length / mid.length;
+  // Measured: 0.00 on every column of both correct 1x4 sheets, 0.22-0.50 on
+  // three of four columns of the 2x2 that shipped by mistake.
+  return emptyFraction >= 0.15;
+}
+
 /** Write each panel out as its own file so a model can be shown them. */
 export async function slicePanels(imagePath, outDir, count) {
   const meta = await sharp(imagePath).metadata();
@@ -214,6 +274,19 @@ export async function inspectSheet({ imagePath, kind = "character", panelCount =
           + `(coverage ${empty.map((p) => p.subject_coverage).join(", ")}) — the sheet did not come back as `
           + `${panelCount} panels`,
       });
+
+  // 1a. Is this one ROW of panels, or a grid sliced into columns?
+  const gaps = [];
+  for (const [i, b] of boxes.entries()) if (await hasMidBandGap(imagePath, b)) gaps.push(i + 1);
+  checks.push(gaps.length >= Math.ceil(panelCount / 2)
+    ? {
+        id: "layout_is_single_row",
+        status: "fail",
+        detail: `columns ${gaps.join(", ")} each have a band of bare backdrop across the middle — `
+          + `this looks like a 2x${panelCount / 2} GRID, not one row of ${panelCount} panels. `
+          + "Every panel crop taken from it is wrong.",
+      }
+    : { id: "layout_is_single_row", status: "ok", detail: `one row of ${panelCount} panels` });
 
   // 1b. Did the close-up actually fill its panel?
   //

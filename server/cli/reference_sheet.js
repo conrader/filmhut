@@ -51,17 +51,43 @@ if (!KINDS.has(kind)) {
 const refs = Array.isArray(args["ref-source-id"]) ? args["ref-source-id"] : args["ref-source-id"] ? [args["ref-source-id"]] : [];
 const description = String(args.description ?? "").trim();
 
-// Shared across both kinds: the aesthetic and the no-text rule. Sheets that
-// come back with captions are useless as refs — the caption gets rendered into
-// every downstream shot.
+// Shared across both kinds. Sheets that come back with captions are useless as
+// refs — the caption gets rendered into every downstream shot.
+//
+// The film-stock name is deliberately ABSENT here.
+//
+// A sheet for a paper prop came back with "KO5aK POROT 400N" typed across the
+// close-up panel: the model had read "Kodak Portra 400" out of the aesthetic
+// block and printed it onto the subject. Naming a stock is a weak stylistic
+// nudge; on a subject that can carry writing it is a free-text field. Describe
+// the look instead, in words that are not brands.
 const AESTHETIC = `[PHOTOGRAPHIC AESTHETIC]
-Documentary photography, RAW 35mm Kodak Portra 400 colour, visible surface texture and fine detail, available-light soft studio lighting. ABSOLUTELY NOT a 3D render, video-game CG, Pixar, smoothed-skin filter, anime, or digital painting. Each panel is a separate on-set photograph.
+Documentary photography on 35mm colour film, soft natural grain, gentle warm highlights and cool shadows, visible surface texture and fine detail, available-light soft studio lighting. ABSOLUTELY NOT a 3D render, video-game CG, Pixar, smoothed-skin filter, anime, or digital painting. Each panel is a separate on-set photograph.
 
-[NO TEXT — HARD RULE]
-No captions, labels, words, numbers, headers, annotations, gibberish text or logos anywhere. The image is purely visual.
+[LAYOUT — HARD RULE]
+ONE HORIZONTAL ROW. All panels sit side by side in a single row, each running the FULL HEIGHT of the image. This is NOT a 2x2 grid, NOT stacked, NOT a contact sheet. No panel sits above or below another.
 
 [OUTPUT]
 High-resolution 16:9 production sheet, clean editorial layout, neutral mid-grey seamless backdrop, no decorative borders between panels.`;
+
+/**
+ * The no-text rule, worded for the subject.
+ *
+ * A person cannot plausibly carry writing, so the generic rule holds. A sheet
+ * of paper is nothing but a surface for writing, and asking for "no text" on a
+ * telegram fights the subject — the model resolves the conflict by producing
+ * gibberish, which is worse than either outcome. So the paper case asks for
+ * illegibility rather than absence.
+ */
+function noTextRule(kind, description) {
+  const papery = kind === "item"
+    && /\b(paper|letter|telegram|note|document|book|page|card|map|newspaper|ticket|label)\b/i.test(description);
+  return papery
+    ? `[TEXT — HARD RULE]
+Any writing on the object is BLURRED, faded and ILLEGIBLE — the impression of typed lines at a distance, never readable words. No legible letters, no invented alphabets, no gibberish that reads as an attempt at words. Nothing anywhere in frame but the object itself: no captions, labels, headers, annotations, watermarks or logos, and no camera, film or brand names rendered anywhere.`
+    : `[NO TEXT — HARD RULE]
+No captions, labels, words, numbers, headers, annotations, gibberish text or logos anywhere. The image is purely visual. Do not render camera, film stock or brand names into the picture.`;
+}
 
 function characterPrompt() {
   return `Professional character reference sheet. Subject: ${args.name}${description ? ` — ${description}` : ""}${refs.length ? ` — the SAME person shown in the reference photograph${refs.length > 1 ? "s" : ""}` : ""}. 16:9 horizontal layout with EXACTLY FOUR EQUAL-WIDTH PANELS side by side, left to right:
@@ -79,6 +105,8 @@ Where this prompt conflicts with the reference photograph${refs.length > 1 ? "s"
 
 ` : ""}[HARD CONSISTENCY]
 EXACT same face, costume, hair and lighting in all four panels. Panels 1-3 at the same scale, head and feet aligned.
+
+${noTextRule(kind, description)}
 
 ${AESTHETIC}`;
 }
@@ -99,6 +127,8 @@ Where this prompt conflicts with the reference photograph, the PHOTOGRAPH WINS f
 
 ` : ""}[HARD CONSISTENCY]
 Identical lighting across all four panels. The object reads as the same physical thing photographed four times, not four similar objects.
+
+${noTextRule(kind, description)}
 
 ${AESTHETIC}`;
 }
