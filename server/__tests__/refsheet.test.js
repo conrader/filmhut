@@ -185,7 +185,7 @@ describe("inspectSheet", () => {
     const f = await sheet("id.png", [[0.05, 0.8], [0.05, 0.8], [0.05, 0.8], [0.05, 0.8]]);
     const r = await inspectSheet({ imagePath: f, kind: "character", panelCount: 4, outDir: path.join(dir, "o4") });
     assert.equal(r.identity_checked, false);
-    for (const id of ["identity_consistency", "feature_consistency", "no_text"]) {
+    for (const id of ["identity_consistency", "feature_consistency", "no_text", "anatomy"]) {
       assert.equal(r.checks.find((c) => c.id === id).status, "unchecked", `${id} must stay unchecked`);
     }
     assert.notEqual(r.machine_verdict, "pass", "there is no pass verdict — only a human-or-model verdict approves");

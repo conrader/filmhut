@@ -31,6 +31,11 @@
 // matched scale (the crop that makes a stray moustache obvious), settles every
 // question a machine can settle, and marks the node `pending`. Approval is a
 // separate, explicit act by whoever looked.
+//
+// The `unchecked` list is a CHECKLIST, not a disclaimer. It is there because a
+// reviewer with no prompt reviews whatever catches the eye: one sheet was
+// approved with a note about the legibility of a prop, and the same image had
+// THREE HANDS in it. Read every unchecked item and answer it deliberately.
 
 import path from "node:path";
 import fs from "node:fs/promises";

@@ -371,6 +371,15 @@ export async function inspectSheet({ imagePath, kind = "character", panelCount =
     detail: "captions or gibberish lettering anywhere in frame — these get baked into every "
       + "downstream shot. Look at the full sheet.",
   });
+  checks.push({
+    id: "anatomy",
+    status: "unchecked",
+    detail: "COUNT THE HANDS. Then the arms, then the fingers on each hand. A generated "
+      + "reference once shipped with three hands — two on a prop and a third flat on the "
+      + "desk beside it — through a review that was busy reading the prop and never counted. "
+      + "Anatomy errors survive into every clip anchored on the image and are invisible "
+      + "until someone looks for them specifically. Count, do not glance.",
+  });
 
   return {
     kind,
