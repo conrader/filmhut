@@ -51,7 +51,7 @@ import { parseArgs, emitSuccess, emitFailure, classify } from "./_cli.js";
 
 const args = parseArgs({
   name:              { type: "string" },
-  kind:              { type: "string" },   // character | item
+  kind:              { type: "string" },   // character | creature | location | item
   description:       { type: "string", short: "d" },
   "ref-source-id":   { type: "string", multiple: true },
   "source-node-id":  { type: "string" },
@@ -63,7 +63,7 @@ const args = parseArgs({
   single:            { type: "boolean" },  // one composed view instead of four panels
 });
 
-const KINDS = new Set(["character", "item"]);
+const KINDS = new Set(["character", "creature", "location", "item"]);
 const kind = args.kind ?? "character";
 
 if (!args.name) {
@@ -185,8 +185,71 @@ Where this prompt conflicts with the reference photograph, the PHOTOGRAPH WINS f
 Documentary product photography on 35mm colour film, soft natural grain, visible surface texture and fine detail. ABSOLUTELY NOT a 3D render, video-game CG, Pixar, or digital painting.`;
 }
 
-const prompt = kind === "character"
-  ? characterPrompt()
+/**
+ * An animal is a character, but the character template is written about people
+ * — "ONE person", "spectacles", "facial hair", a bust for a face anchor. Asked
+ * for a dog it fights itself. Same four-panel geometry, different vocabulary.
+ */
+function creaturePrompt() {
+  return `Professional animal character reference sheet. Subject: ${args.name}${description ? ` — ${description}` : ""}${refs.length ? ` — the SAME animal shown in the reference photograph${refs.length > 1 ? "s" : ""}` : ""}. 16:9 horizontal layout with EXACTLY FOUR EQUAL-WIDTH PANELS side by side, left to right:
+
+[PANEL 1] FULL BODY SIDE-FRONT VIEW — the whole animal, head to paws, standing squarely, facing camera and slightly turned.
+[PANEL 2] FULL BODY PROFILE VIEW — perfect 90-degree side view, standing, same scale, showing the true silhouette.
+[PANEL 3] FULL BODY REAR VIEW — facing away, showing the back, tail and hindquarters.
+[PANEL 4] CLOSE-UP OF THE HEAD — head and shoulders only, filling 50-60% of the panel, looking at camera. This panel is the identity anchor for downstream video. It occupies the FULL HEIGHT of its own column and stays inside it.
+
+[IDENTITY — HARD RULE]
+All four panels show ONE animal and one only. No people, no hands, no second animal anywhere in the image. EXACT same breed, size, build, coat colour, coat length and markings in every panel — the same individual photographed four times, not four animals of the same breed. Do not add or remove a collar, harness, tag or clothing that the description does not specify. Correct anatomy: four legs, one tail, ears and eyes in matching pairs.
+
+${refs.length ? `[REFERENCE-PHOTO PRIORITY]
+Where this prompt conflicts with the reference photograph, the PHOTOGRAPH WINS for breed, coat and markings.
+
+` : ""}[HARD CONSISTENCY]
+Identical lighting and scale across all four panels. Panels 1-3 stand on the same ground line.
+
+${noTextRule(kind, description)}
+
+${AESTHETIC}`;
+}
+
+/**
+ * A place recurs across shots exactly as a face or a prop does, and drifts the
+ * same way — the same room comes back with a different window, a different
+ * floor, the door on the other wall. It was the last obvious gap: characters
+ * got sheets, props got sheets, and the set every shot stood in was described
+ * afresh in prose each time.
+ *
+ * Panels are angles rather than rotations of a subject: you cannot walk around
+ * a room the way you walk around a prop, so the useful set is the master, the
+ * reverse, and the two details a shot is most likely to land on.
+ */
+function locationPrompt() {
+  return `Professional location reference sheet for a film set, ONE SINGLE HORIZONTAL ROW of EXACTLY FOUR EQUAL-WIDTH PANELS side by side, left to right. Each panel is a TALL VERTICAL PANEL running the full height of the image. This is NOT a 2x2 grid and NOT a collage.
+
+Subject: ${args.name}${description ? ` — ${description}` : ""}${refs.length ? " — the SAME place shown in the reference photograph" : ""}.
+
+[PANEL 1] WIDE MASTER — the whole space from its main viewpoint, showing the layout, where the light comes from, and how the walls meet.
+[PANEL 2] REVERSE ANGLE — the same space looking back the other way, showing what the master has behind camera.
+[PANEL 3] DETAIL — the principal surface or furniture a scene would play on, closer.
+[PANEL 4] DETAIL — the light source and the texture of the walls or floor, closer.
+
+[IDENTITY — HARD RULE]
+All four panels are ONE room, the same room, with consistent architecture: the same wall colour and material, the same flooring, the same window shape and placement, the same doors, the same fittings. Not four similar rooms. NO PEOPLE and NO ANIMALS anywhere in any panel — this is an empty set photographed before the shoot.
+
+${refs.length ? `[REFERENCE-PHOTO PRIORITY]
+Where this prompt conflicts with the reference photograph, the PHOTOGRAPH WINS for architecture, materials and light.
+
+` : ""}[HARD CONSISTENCY]
+Identical time of day and identical lighting across all four panels.
+
+${noTextRule(kind, description)}
+
+${AESTHETIC}`;
+}
+
+const prompt = kind === "character" ? characterPrompt()
+  : kind === "creature" ? creaturePrompt()
+  : kind === "location" ? locationPrompt()
   : (args.single ? singleItemPrompt() : itemPrompt());
 
 if (args.print) {
@@ -207,7 +270,10 @@ const argv = [
   "--size", args.size ?? "2560x1440",
   // Items land as `reference`; the schema has no `prop` subtype and inventing
   // one would fail validation.
-  "--subtype", kind === "character" ? "character" : "reference",
+  // `creature` has no schema subtype of its own; it is a character in every
+  // way the canvas cares about.
+  "--subtype", kind === "character" || kind === "creature" ? "character"
+    : kind === "location" ? "location" : "reference",
 ];
 for (const r of refs) argv.push("--ref-source-id", r);
 if (args["source-node-id"]) argv.push("--source-node-id", args["source-node-id"]);

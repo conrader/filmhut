@@ -33,6 +33,8 @@ import { colourHistogram, histogramSimilarity } from "./imagesig.js";
 /** What each panel is for, in the order reference_sheet.js asks for them. */
 export const PANEL_ROLES = {
   character: ["front", "profile", "back", "closeup"],
+  creature: ["front", "profile", "back", "head"],
+  location: ["master", "reverse", "detail_surface", "detail_light"],
   item: ["front", "three_quarter", "reverse", "macro"],
 };
 
@@ -191,7 +193,7 @@ export async function buildFaceStrip(imagePath, boxes, outFile, { kind = "charac
   const BG = { r: 16, g: 16, b: 16 };
   const tiles = [];
   for (const [i, box] of boxes.entries()) {
-    const isBust = kind === "character" && boxes.length === 4 && i === 3;
+    const isBust = (kind === "character" || kind === "creature") && boxes.length === 4 && i === 3;
     tiles.push(
       await sharp(imagePath)
         .extract(isBust ? box : band(box, HEAD_BAND))
@@ -300,7 +302,7 @@ export async function inspectSheet({ imagePath, kind = "character", panelCount =
   // ratio does not. Measured on this project's sheets it separated cleanly —
   // 0.44 and 0.56 on the two defective sheets, 0.91 on the good one — but three
   // sheets is an observation, not a calibration, so it warns before it fails.
-  if (kind === "character" && panels.length === 4) {
+  if ((kind === "character" || kind === "creature") && panels.length === 4) {
     const body = panels.slice(0, 3).map((p) => p.subject_coverage).sort((a, b) => a - b)[1];
     const ratio = body > 0 ? round(panels[3].subject_coverage / body) : 1;
     checks.push({
@@ -312,20 +314,41 @@ export async function inspectSheet({ imagePath, kind = "character", panelCount =
     });
   }
 
-  // 2. Costume, across the panels that show a body. The close-up is a bust, so
+  // 2. Costume/consistency across panels.
+  //
+  // A LOCATION is exempt from the body-band test and gets a palette test
+  // instead. Its panels are different ANGLES of one room, not rotations of one
+  // subject: a wide master and a close wall detail are supposed to differ in
+  // composition, and comparing their mid-frame bands scored 0.181 on a sheet
+  // whose architecture was perfectly consistent — blocking approval of a good
+  // reference. What a room's panels should share is palette and light, so that
+  // is what is measured, and only as a warning. The close-up is a bust, so
   //    its body band is collar and shoulders and would drag the number down
   //    for a sheet that is actually correct.
-  const bodyPanels = kind === "character" ? boxes.slice(0, 3) : boxes;
-  if (bodyPanels.length > 1) {
+  if (kind === "location") {
     const hists = [];
-    for (const b of bodyPanels) hists.push(await bandHistogram(imagePath, b, BODY_BAND));
+    for (const b of boxes) hists.push(await colourHistogram(await sharp(imagePath).extract(b).png().toBuffer()));
     const worst = weakestPair(hists);
     checks.push({
-      id: "costume_consistency",
-      status: worst.similarity < 0.55 ? "fail" : worst.similarity < 0.75 ? "warn" : "ok",
-      detail: `weakest pair panels ${worst.pair?.join("/")} at ${worst.similarity}`,
+      id: "palette_consistency",
+      status: worst.similarity < 0.45 ? "warn" : "ok",
+      detail: `weakest pair panels ${worst.pair?.join("/")} at ${worst.similarity}`
+        + " — angles of one room differ by design; only a wholesale palette shift is worth a look",
       value: worst.similarity,
     });
+  } else {
+    const bodyPanels = kind === "character" || kind === "creature" ? boxes.slice(0, 3) : boxes;
+    if (bodyPanels.length > 1) {
+      const hists = [];
+      for (const b of bodyPanels) hists.push(await bandHistogram(imagePath, b, BODY_BAND));
+      const worst = weakestPair(hists);
+      checks.push({
+        id: "costume_consistency",
+        status: worst.similarity < 0.55 ? "fail" : worst.similarity < 0.75 ? "warn" : "ok",
+        detail: `weakest pair panels ${worst.pair?.join("/")} at ${worst.similarity}`,
+        value: worst.similarity,
+      });
+    }
   }
 
   // 3. Backdrop. A panel shot on a different set reads as a different
@@ -371,6 +394,16 @@ export async function inspectSheet({ imagePath, kind = "character", panelCount =
     detail: "captions or gibberish lettering anywhere in frame — these get baked into every "
       + "downstream shot. Look at the full sheet.",
   });
+  if (kind === "location") {
+    checks.push({
+      id: "architecture_consistency",
+      status: "unchecked",
+      detail: "is every panel the SAME room? Same wall colour and material, same flooring, "
+        + "same window shape and placement, same doors and fittings. Four plausible rooms "
+        + "that are not one room is the failure to look for, and no machine check here "
+        + "distinguishes it from four angles of one room.",
+    });
+  }
   checks.push({
     id: "anatomy",
     status: "unchecked",

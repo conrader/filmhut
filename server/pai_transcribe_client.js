@@ -6,7 +6,7 @@
 // timing, and searchable takes all start here.
 
 import fs from "node:fs";
-import { err, pollJob, postForm, quotePrice, requestIdOf } from "./deapi_client.js";
+import { downloadUrlToBuffer, err, pollJob, postForm, quotePrice, requestIdOf } from "./deapi_client.js";
 import { getDefault } from "./model_registry.js";
 
 const RESOURCE = "audio/transcriptions";
@@ -69,8 +69,28 @@ export async function transcribe({ filePath, diarize = false, onSubmitted } = {}
 
   const job = await pollJob(requestId, { timeoutMs: POLL_TIMEOUT_MS, logTag: "deapi-stt" });
 
-  const text = job?.text ?? job?.result?.text ?? "";
-  const rawSegments = job?.segments ?? job?.result?.segments ?? [];
+  // THE TRANSCRIPT IS NOT IN THE JOB.
+  //
+  // A finished transcription job carries `text: null` and `result: null`; the
+  // document lives at `result_url`, a presigned JSON blob, exactly as an image
+  // or video result does. Reading only the job body meant every successful
+  // transcription reported "finished with no text" — including a clean speech
+  // recording — so the failure looked like a bad input rather than a client
+  // that never fetched its own result.
+  let text = job?.text ?? job?.result?.text ?? "";
+  let rawSegments = job?.segments ?? job?.result?.segments ?? [];
+
+  if ((typeof text !== "string" || text.trim() === "") && typeof job?.result_url === "string") {
+    let doc;
+    try {
+      doc = JSON.parse((await downloadUrlToBuffer(job.result_url)).toString("utf8"));
+    } catch (e) {
+      throw err("infra", `deAPI transcription ${requestId}: result document unreadable — ${e.message}`);
+    }
+    text = doc?.text ?? "";
+    rawSegments = doc?.segments ?? [];
+  }
+
   if (typeof text !== "string" || text.trim() === "") {
     throw err("infra", `deAPI transcription ${requestId} finished with no text`);
   }

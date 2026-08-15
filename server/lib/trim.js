@@ -93,13 +93,35 @@ export async function planTrims(clips, { tolerance = KEYFRAME_TOLERANCE_S } = {}
 
     let drift = 0;
     let landsAt = Number(clip.in_s ?? 0);
-    if (trimmed && Number(clip.in_s ?? 0) > 0) {
+    let outAligned = true;
+
+    if (trimmed) {
       const keyframes = await probeKeyframes(clip.path);
-      landsAt = keyframeAtOrBefore(keyframes, Number(clip.in_s));
-      drift = Number(clip.in_s) - landsAt;
+
+      if (Number(clip.in_s ?? 0) > 0) {
+        landsAt = keyframeAtOrBefore(keyframes, Number(clip.in_s));
+        drift = Number(clip.in_s) - landsAt;
+      }
+
+      // THE OUT POINT MATTERS TOO, AND USED NOT TO BE CHECKED AT ALL.
+      //
+      // Only in-points were measured against keyframes, so a clip trimmed at
+      // the END — which is the common case, and every trim in one finished
+      // film — reported zero drift and was stream-copied. Copying to an out
+      // point inside a GOP leaves the muxer emitting packets whose DTS run
+      // past the cut, and the export lands with non-monotonic timestamps: it
+      // plays, mostly, and is quietly broken.
+      //
+      // A copy can only end a segment where a keyframe begins, so the out
+      // point has to coincide with one.
+      if (clip.out_s != null && clip.out_s < media.duration) {
+        outAligned = keyframes.some((k) => Math.abs(k - Number(clip.out_s)) <= tolerance);
+      }
     }
 
-    analysed.push({ ...clip, media, trimmed, copyLandsAt: landsAt, copyDriftSeconds: drift });
+    analysed.push({
+      ...clip, media, trimmed, copyLandsAt: landsAt, copyDriftSeconds: drift, outAligned,
+    });
   }
 
   const anyTrimmed = analysed.some((c) => c.trimmed);
@@ -116,11 +138,19 @@ export async function planTrims(clips, { tolerance = KEYFRAME_TOLERANCE_S } = {}
   if (rates.size > 1) reasons.push(`audio sample rates differ (${[...rates].join(", ")}Hz)`);
   if (dims.size > 1) reasons.push(`resolutions differ (${[...dims].join(", ")})`);
   if (someSilent) reasons.push("at least one clip has no audio track");
+  const misalignedOut = analysed.filter((c) => c.trimmed && !c.outAligned);
+  if (misalignedOut.length) {
+    reasons.push(
+      `${misalignedOut.length} out point${misalignedOut.length === 1 ? " does" : "s do"} not land on a keyframe`,
+    );
+  }
   if (anyTrimmed && maxDrift > tolerance) {
     reasons.push(`a cut is ${maxDrift.toFixed(3)}s from the nearest keyframe`);
   }
 
-  const canCopy = uniform && (!anyTrimmed || maxDrift <= tolerance);
+  const canCopy = uniform
+    && (!anyTrimmed || maxDrift <= tolerance)
+    && misalignedOut.length === 0;
 
   return {
     clips: analysed,

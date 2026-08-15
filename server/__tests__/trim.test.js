@@ -168,3 +168,50 @@ describe("against real encoded video", { skip: !ffmpegAvailable }, () => {
     );
   });
 });
+
+// An OUT point had never been measured against keyframes — only in-points were.
+// So a clip trimmed at the END reported zero drift, took the stream-copy path,
+// and produced an export with non-monotonic DTS: it plays, mostly, and is
+// quietly broken. Every trim in one finished film was out-point-only, and every
+// export of it was corrupt.
+//
+// The clips this happens on carry exactly ONE keyframe, at 0.000 — H3 output
+// does — so no out point inside them can ever be copy-safe.
+test("an out point that misses a keyframe forces a re-encode", async () => {
+  const { planTrims } = await import("../lib/trim.js");
+  const single = await singleKeyframeClip("okf.mp4");
+
+  const trimmed = await planTrims([{ path: single, in_s: null, out_s: 2.0 }]);
+  assert.equal(trimmed.mode, "encode", `reasons: ${JSON.stringify(trimmed.reasons)}`);
+  assert.match(trimmed.reasons.join(" "), /out point/);
+
+  const whole = await planTrims([{ path: single, in_s: null, out_s: null }]);
+  assert.equal(whole.mode, "copy", "an untrimmed reel must still stream-copy");
+});
+
+test("A TRIMMED STREAM COPY IS WHAT CORRUPTED THE TIMESTAMPS", async () => {
+  // Guards the diagnosis, not just the fix: if a future ffmpeg makes trimmed
+  // concat+copy safe, this test fails and the extra re-encode can be dropped
+  // deliberately rather than by accident.
+  const single = await singleKeyframeClip("dts.mp4");
+  const list = path.join(dir, "dts_list.txt");
+  await fsp.writeFile(list, `file '${single}'\noutpoint 2.000\nfile '${single}'\n`, "utf8");
+
+  const copied = path.join(dir, "dts_copy.mp4");
+  await run("ffmpeg", ["-y", "-f", "concat", "-safe", "0", "-i", list, "-c", "copy", copied, "-loglevel", "error"]);
+  const { stderr } = await run("ffmpeg", ["-v", "error", "-i", copied, "-f", "null", "-"]).catch((e) => e);
+  assert.match(String(stderr ?? ""), /non monotonic/i,
+    "trimmed concat+copy is expected to corrupt DTS — that is why planTrims refuses it");
+});
+
+/** A clip with exactly one keyframe, like the video model's own output. */
+async function singleKeyframeClip(name) {
+  const out = path.join(dir, name);
+  await run("ffmpeg", [
+    "-y", "-f", "lavfi", "-i", "testsrc=size=320x240:rate=24:d=5",
+    "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono", "-shortest",
+    "-c:v", "libx264", "-g", "1000", "-keyint_min", "1000", "-sc_threshold", "0",
+    "-pix_fmt", "yuv420p", "-c:a", "aac", out, "-loglevel", "error",
+  ]);
+  return out;
+}

@@ -151,3 +151,53 @@ test("transcription uses source_file and include_ts, and has no diarization fiel
   assert.ok(keys.includes("include_ts"), 'deAPI wants "include_ts", not "timestamps"');
   assert.ok(!keys.includes("diarization"), "diarization is a model capability, not a request field");
 });
+
+// A finished transcription job carries `text: null` and `result: null`; the
+// document lives at `result_url`, exactly as an image or video result does.
+// Reading only the job body made EVERY successful transcription report
+// "finished with no text" — including a clean speech recording — so the
+// failure read as a bad input rather than a client that never fetched its own
+// result. It also made transcription useless as a verification tool at the one
+// moment it was needed: checking that a narration was audible in a finished mix.
+test("the transcript is fetched from result_url, not read out of the job", async () => {
+  process.env.DEAPI_KEY = process.env.DEAPI_KEY || "1|x";
+  const { writeFileSync, mkdtempSync } = await import("node:fs");
+  const os = await import("node:os");
+  const tmp = path.join(mkdtempSync(path.join(os.tmpdir(), "stt2-")), "a.mp3");
+  writeFileSync(tmp, Buffer.from([0x49, 0x44, 0x33]));
+
+  const RESULT_URL = "https://results.example.test/abc.json";
+  const DOC = {
+    text: "Eleven years I have sent other people's words up this hill.",
+    segments: [{ start: 0, end: 3.5, text: "Eleven years I have sent other people's words up this hill." }],
+  };
+
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    if (u.endsWith("/price")) return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+    if (u === RESULT_URL) {
+      return new Response(JSON.stringify(DOC), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (u.includes("/jobs/")) {
+      // status done, transcript ABSENT from the job body — the real shape.
+      return new Response(JSON.stringify({
+        data: { status: "done", text: null, result: null, result_url: RESULT_URL, progress: 100 },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    // submit
+    return new Response(JSON.stringify({ data: { request_id: "req_stt_1" } }), {
+      status: 200, headers: { "content-type": "application/json" },
+    });
+  };
+
+  try {
+    const { transcribe } = await import("../pai_transcribe_client.js");
+    const out = await transcribe({ filePath: tmp });
+    assert.match(out.text, /Eleven years/, "the transcript must come from the result document");
+    assert.equal(out.segments.length, 1);
+    assert.equal(out.segments[0].text, DOC.segments[0].text);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
