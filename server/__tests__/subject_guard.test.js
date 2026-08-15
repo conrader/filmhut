@@ -152,3 +152,37 @@ describe("coverage", () => {
     assert.match(r.blocked, /telegraph key/);
   });
 });
+
+describe("the cost of literal matching, stated rather than hidden", () => {
+  test("A GENERIC ALIAS FIRES ON COMPOUND NOUNS — 'car' matches 'car park'", () => {
+    // This blocked a real shot. The prompt said "a deserted supermarket car
+    // park"; the subject "the car" carried the alias "car"; the guard refused
+    // to render, correctly by its own rules and wrongly in fact.
+    //
+    // It is NOT fixed in the matcher, and this test exists to say so. Deciding
+    // that "car park" is not "car" needs to know what the words mean, and a
+    // guard that guesses at meaning is the thing this design deliberately
+    // avoided. The mitigation is that aliases must be DISTINCTIVE — "silver
+    // hatchback", not "car".
+    const generic = { name: "the car", aliases: ["car"] };
+    assert.ok(mentions("he stood in the supermarket car park", generic),
+      "documents the false positive: a short generic alias matches inside a compound");
+
+    // AND THE NAME COUNTS TOO. Changing only the aliases does not help: the
+    // name is matched with its article stripped, so "the car" still reduces to
+    // "car" and still fires. The subject itself has to be named distinctively.
+    const aliasesOnly = { name: "the car", aliases: ["silver hatchback"] };
+    assert.ok(mentions("he stood in the supermarket car park", aliasesOnly),
+      "a generic NAME fires even when the aliases are distinctive");
+
+    const distinctive = { name: "the silver hatchback", aliases: ["hatchback"] };
+    assert.ok(!mentions("he stood in the supermarket car park", distinctive),
+      "naming the subject distinctively is the actual mitigation");
+    assert.ok(mentions("he got into the silver hatchback", distinctive));
+  });
+
+  test("the subject's own name is still matched without its article", () => {
+    const s = { name: "the car", aliases: [] };
+    assert.ok(mentions("he got into the car", s));
+  });
+});
