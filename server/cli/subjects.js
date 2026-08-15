@@ -28,6 +28,7 @@ import fs from "node:fs/promises";
 
 import { parseArgs, emitSuccess, emitFailure, classify, isoNow, PAI_REPO_ROOT } from "./_cli.js";
 import { readActiveProject } from "../local_mirror.js";
+import { buildChecklist } from "../lib/checklist.js";
 
 const args = parseArgs({
   declare:      { type: "boolean" },
@@ -35,6 +36,7 @@ const args = parseArgs({
   forget:       { type: "boolean" },
   list:         { type: "boolean" },
   audit:        { type: "boolean" },
+  checklist:    { type: "boolean" },
   name:         { type: "string" },
   kind:         { type: "string" },
   alias:        { type: "string", multiple: true },
@@ -87,6 +89,7 @@ async function resolved() {
   });
 }
 
+
 const key = (s) => String(s ?? "").trim().toLowerCase();
 
 try {
@@ -129,6 +132,19 @@ try {
   }
 
   const rows = await resolved();
+
+  if (args.checklist) {
+    const items = buildChecklist(rows);
+    const failed = items.filter((i) => i.status === "fail");
+    emitSuccess({
+      ok: failed.length === 0,
+      project_id: projectId,
+      checklist: items,
+      failed: failed.map((i) => i.id),
+      unchecked: items.filter((i) => i.status === "unchecked").map((i) => i.id),
+    });
+    process.exit(failed.length === 0 ? 0 : 1);
+  }
 
   if (args.audit) {
     const unanchored = rows.filter((r) => !r.anchored);

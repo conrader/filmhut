@@ -26,6 +26,11 @@ import { readActiveProject } from "../local_mirror.js";
 const args = parseArgs({
   out:      { type: "string", short: "o", default: "reel.mp4" },
   workflow: { type: "string", short: "w", default: "workflow.json" },
+  // Every other CLI takes this. reel_stitch did not, so stitching any project
+  // but the active one meant switching the whole session first — and passing
+  // the flag anyway failed with "Unknown option", which reads as a typo rather
+  // than a missing feature.
+  "project-id": { type: "string" },
   // Dissolves instead of hard cuts. Off by default: a transition forces a
   // re-encode and shortens the reel, and neither should happen unasked.
   transition:          { type: "string" },
@@ -35,7 +40,7 @@ const args = parseArgs({
 // Active project's directory — local_path values in workflow.json
 // resolve against this. PAI_REPO_ROOT is the repo root; the active
 // project sits under projects/<active-id>/.
-const activeId = await readActiveProject().catch(() => null);
+const activeId = args["project-id"] || (await readActiveProject().catch(() => null));
 const projectBaseDir = activeId
   ? path.join(PAI_REPO_ROOT, "projects", activeId)
   : PAI_REPO_ROOT;
